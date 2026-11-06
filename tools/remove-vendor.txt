@@ -1,0 +1,62 @@
+# 待删除的系统应用（每行一个 APK 文件名）
+# 以 # 开头为注释。按 stage 分组，可整段注释掉。
+#
+# 依据：F:\wifi\sp970\bak\v11\system-apps.md
+
+# ---- stage 1：厂商自研（gosomo / goso / unifront / webkey / pingbao）----
+# webkey 持 120+ 条权限（READ_SMS/WRITE_SMS/INSTALL_PACKAGES/MASTER_CLEAR/READ_LOGS），
+# 等同远程控制台，必删。
+webkey_signed.apk
+pingbao.apk
+GosoSystemService.apk
+LogCatcher.apk
+Upgrade.apk
+Evt.apk
+StaInfoMonitor.apk
+DevInfo.apk
+PowerOffAlarm.apk
+FlashLight.apk
+
+# ---- stage 2：高通工程 / 测试类（无用户价值，常驻吃内存）----
+FTMMode.apk
+AGPSTestMode.apk
+ObjectCloneRemove.apk
+QRDUpdate.apk
+QualcommSettings.apk
+GsmTuneAway.apk
+atuner.apk
+DataMonitor.apk
+InterfacePermissions.apk
+PPPreference.apk
+TimeService.apk
+StorageMgr.apk
+ProfileMgr.apk
+CalendarLocalAccount.apk
+CellBroadcastWidget.apk
+FMRecord.apk
+colorservice.apk
+Development.apk
+
+# ---- stage 3：AOSP 装饰件（可选，省空间用）----
+# LiveWallpapers.apk
+# LiveWallpapersPicker.apk
+# MagicSmokeWallpapers.apk
+# PhaseBeam.apk
+# NoiseField.apk
+# Galaxy4.apk
+# HoloSpiralWallpaper.apk
+# VisualizationWallpapers.apk
+# PhotoTable.apk
+# BasicDreams.apk
+# Email.apk
+# Exchange2.apk
+# PrintSpooler.apk
+# PicoTts.apk
+# NotePad2.apk
+
+# ---- 绝对不要删（列在这里是为了提醒）----
+# TeleService.apk  TelephonyProvider.apk  Mms.apk  Settings.apk  SettingsProvider.apk
+# SystemUI.apk  Keyguard.apk  Launcher3.apk  MediaProvider.apk  PackageInstaller.apk
+# qcrilmsgtunnel.apk  atfwd.apk  fastdormancy.apk  ims.apk  btmultisim.apk
+# MultisimSettings.apk  NetworkSetting.apk  PhoneFeatures.apk  SystemAgent.apk
+# CellBroadcastReceiver.apk  Stk.apk  Contacts.apk  Dialer.apk  ContactsProvider.apk
