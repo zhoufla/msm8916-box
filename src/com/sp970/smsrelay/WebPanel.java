@@ -538,6 +538,19 @@ public final class WebPanel {
         JSONArray arr = root.optJSONArray("channels");
         if (arr == null) throw new IllegalArgumentException("缺少 channels 数组");
 
+        // 非 root 进程不能绑 1024 以下端口（Android 保留端口），80/443 必然起不来。
+        // 不拦的话保存后面板切到 80 绑定失败退出，旧端口也停了——整个面板失联
+        // （2026-11-07 真机踩过，只能靠 root 改 /sdcard/smsrelay.conf 救回来）。
+        JSONObject webNew = root.optJSONObject("web");
+        if (webNew != null) {
+            int np = webNew.optInt("port", 8080);
+            if (np > 0 && np < 1024) {
+                throw new IllegalArgumentException(
+                        "端口 " + np + " 不可用：Android 非 root 进程不能绑定 1024 以下的端口"
+                        + "（80/443 绑不上），请用 1024–65535 之间的端口");
+            }
+        }
+
         for (int i = 0; i < arr.length(); i++) {
             JSONObject c = arr.optJSONObject(i);
             if (c == null) throw new IllegalArgumentException("channels[" + i + "] 不是对象");

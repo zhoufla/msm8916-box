@@ -94,6 +94,40 @@ public final class Radio {
             }
             if (slots.length() == 0) slots.put("未知");
             o.put("simSlots", slots);
+
+            // 驻留小区：4.4 无公开频段 API，走 getAllCellInfo()（API 17+）。
+            // 实测本机 ROM：RIL 支持 CELL_INFO_LIST（能拿到 PCI/TAC/CID），
+            // 但 CellIdentityLte 从不填 EARFCN（注册状态响应里也没有），
+            // 所以频段号在本 ROM 拿不到——pci/tac/cid 照常输出，earfcn/band 有则给。
+            try {
+                if (android.os.Build.VERSION.SDK_INT >= 17) {
+                    TelephonyManager tm = (TelephonyManager)
+                            ctx.getSystemService(Context.TELEPHONY_SERVICE);
+                    java.util.List<android.telephony.CellInfo> cis =
+                            tm == null ? null : tm.getAllCellInfo();
+                    if (cis != null) {
+                        for (int i = 0; i < cis.size(); i++) {
+                            android.telephony.CellInfo ci = cis.get(i);
+                            if (!(ci instanceof android.telephony.CellInfoLte)) continue;
+                            if (!ci.isRegistered()) continue;
+                            android.telephony.CellIdentityLte id =
+                                    ((android.telephony.CellInfoLte) ci).getCellIdentity();
+                            if (id == null) continue;
+                            o.put("pci", id.getPci());
+                            o.put("tac", id.getTac());
+                            o.put("cid", id.getCi());
+                            int e = lteEarfcn(id);
+                            if (e > 0) {
+                                o.put("earfcn", e);
+                                o.put("band", LteBand.fromEarfcn(e));
+                            }
+                            break;
+                        }
+                    }
+                }
+            } catch (Throwable t) {
+                Logs.add("radio", "getAllCellInfo 失败: " + t);
+            }
             o.put("route", join(sec.get("ROUTE")).trim());
             o.put("iccid", iccid(ctx));
             o.put("iccidRaw", iccidRaw(ctx));
@@ -385,6 +419,28 @@ public final class Radio {
     }
 
     // ---------- #16 SIM 锁 / ICCID ----------
+
+    /**
+     * 从 CellIdentityLte 反射拿 EARFCN。
+     * 公开 getEarfcn() 是 API 24 才有的，这台 4.4 上只能反射：
+     * 先试 getEarfcn() 方法（新 ROM 有），再退内部字段 mEarfcn（API 17+ 的内部结构都有）。
+     * 都拿不到返回 -1（调用方当"读不到"处理）。
+     */
+    static int lteEarfcn(android.telephony.CellIdentityLte id) {
+        try {
+            java.lang.reflect.Method m = id.getClass().getMethod("getEarfcn");
+            m.setAccessible(true);
+            return m.invoke(id) instanceof Integer ? (Integer) m.invoke(id) : -1;
+        } catch (Throwable ignored) {
+        }
+        try {
+            java.lang.reflect.Field f = id.getClass().getDeclaredField("mEarfcn");
+            f.setAccessible(true);
+            return f.getInt(id);
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
 
     /**
      * 固件没有 ril.iccid.* 属性，只能问 TelephonyManager。

@@ -544,7 +544,7 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
         <h3>设备与面板</h3>
         <div class="grid g2">
           <label class="fld"><span>设备名（消息前缀用）</span><input id="cfgDevice"></label>
-          <label class="fld"><span>面板端口</span><input id="cfgPort" type="number" min="1" max="65535"></label>
+          <label class="fld"><span>面板端口（1024–65535，80/443 绑不了）</span><input id="cfgPort" type="number" min="1024" max="65535"></label>
           <label class="fld"><span>面板账号</span><input id="cfgUser"></label>
           <label class="fld"><span>面板密码</span><input id="cfgPass" type="password"></label>
         </div>
@@ -1623,6 +1623,10 @@ function loadNet(){
     $('netState').innerHTML=
       kv('制式','<span class="mono">'+esc(modeTxt)+'</span> · '+esc(d.modeLabel||''))+
       kv('网络',esc(d.netType||'-')+' · '+esc(d.operator||'-'))+
+      kv('驻留小区',d.band?('<span class="chip acc">'+esc(d.band)+'</span> <span class="mono">EARFCN '+esc(d.earfcn)+
+        (d.pci!==undefined?' · PCI '+esc(d.pci):'')+'</span>'):
+        (d.pci!==undefined?'<span class="mono">PCI '+esc(d.pci)+' · TAC '+esc(d.tac)+' · CID '+esc(d.cid)+
+        '</span> <span class="hint">（频段号本 ROM 未上报）</span>':'<span class="hint">读不到（RIL 未上报小区信息）</span>'))+
       kv('首选 APN',esc(d.preferredApn||'-')+' <span class="mono">'+
         (d.preferredApnApn?'（'+esc(d.preferredApnApn)+'）':'')+'</span>')+
       kv('默认路由','<span class="mono">'+esc((d.route||'-').split('\n')[0])+'</span>');
