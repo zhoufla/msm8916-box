@@ -56,7 +56,7 @@ if check_ok "/api/status" "$st"; then
 fi
 sy=$(get /api/sys)
 if check_ok "/api/sys" "$sy"; then
-    show "baseband,uptime,operator,netType,battery.percent,signal.dbm,signal.text" "$sy"
+    show "baseband,uptime,operator,netType,cpu.load1,mem.totalMb,temps.cpu,signal.dbm,signal.text" "$sy"
 fi
 check_ok "/api/messages" "$(get '/api/messages?limit=5')"
 check_ok "/api/outbox" "$(get '/api/outbox?limit=5')"
