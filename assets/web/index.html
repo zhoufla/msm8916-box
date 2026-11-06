@@ -144,6 +144,7 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
       <button data-v="chs">通道</button>
       <button data-v="sys">系统</button>
       <button data-v="wifi">WiFi</button>
+      <button data-v="upd">升级</button>
     </nav>
   </div>
 </header>
@@ -292,6 +293,64 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
       </div>
     </div>
   </section>
+
+  <!-- 升级 -->
+  <section class="view" id="v-upd">
+    <div class="grid g2">
+      <div class="card">
+        <h3>当前版本</h3>
+        <div class="row" style="margin-bottom:10px">
+          <span class="chip acc" id="updCur">读取中…</span>
+          <span class="hint" id="updChecked">—</span>
+        </div>
+        <div id="updLatest"></div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn sm" id="updCheckBtn" onclick="checkUpd(this)">检查更新</button>
+          <button class="btn sm primary" id="updApplyBtn" onclick="applyUpd(this)" disabled>下载并安装</button>
+        </div>
+        <div class="hint" id="updPhase" style="margin-top:8px"></div>
+      </div>
+      <div class="card">
+        <h3>更新源</h3>
+        <label class="fld"><span>方式</span>
+          <select id="updMode" onchange="updModeChange()">
+            <option value="github">GitHub Release</option>
+            <option value="manifest">自建 manifest（镜像/内网）</option>
+            <option value="off">关闭</option>
+          </select>
+        </label>
+        <label class="fld" id="updRepoBox"><span>仓库（owner/repo）</span><input id="updRepo" placeholder="zhoufla/msm8916-box"></label>
+        <label class="fld" id="updManBox" style="display:none"><span>manifest 地址</span><input id="updManifest" placeholder="http://…/latest.json"></label>
+        <div class="grid g2">
+          <label class="fld"><span>自动检查</span>
+            <select id="updAuto"><option value="1">开启</option><option value="0">关闭</option></select>
+          </label>
+          <label class="fld"><span>检查间隔（小时）</span><input id="updInterval" type="number" min="1" max="720" value="24"></label>
+        </div>
+        <label class="fld"><span>跳过证书校验（4.4 根证书太旧时用）</span>
+          <select id="updInsecure"><option value="0">不跳过（推荐）</option><option value="1">跳过</option></select>
+        </label>
+        <label class="fld"><span>静默安装用的本机 root 通道凭据（user:pass，留空不用）</span>
+          <input id="updWebkey" placeholder="admin:admin">
+        </label>
+        <button class="btn primary" onclick="saveUpdCfg(this)">保存</button>
+        <div class="hint" style="margin-top:9px">安装包会验 sha256 + 签名一致才装，跳过证书校验也不会装进别人的包</div>
+      </div>
+      <div class="card">
+        <h3>升级说明</h3>
+        <div class="hint" id="updNotes">—</div>
+      </div>
+      <div class="card">
+        <h3>安装方式</h3>
+        <div class="hint" id="updHow">
+          有 root 时走 <code>su -c pm install -r</code> 静默装，装完自动拉起；
+          没有 root 会唤起系统安装器，需要手动点确认；两条都不走通就把 APK 留在
+          <span id="updDir" class="mono">/sdcard/Download</span>，用 adb 装。
+        </div>
+        <div class="hint" style="margin-top:8px">cloud build：<code>git tag v1.2.0 &amp;&amp; git push --tags</code> 触发 GitHub Actions，编译签名后自动发 Release</div>
+      </div>
+    </div>
+  </section>
 </div>
 
 <div class="modal" id="modal"><div class="box">
@@ -382,6 +441,7 @@ function loadView(v){
   else if(v==='chs') loadConfig();
   else if(v==='sys') loadSys();
   else if(v==='wifi') loadWifi();
+  else if(v==='upd') loadUpd();
 }
 function reloadAll(){ loadView(state.view); }
 
@@ -796,6 +856,86 @@ function scanWifi(){
         ' dBm</td><td class="num">'+r.channel+'</td></tr>';
     }
     $('scanList').innerHTML=h+'</table>'+(d.hint?'<div class="hint" style="margin-top:6px">'+esc(d.hint)+'</div>':'');
+  });
+}
+
+/* ---------- 升级 ---------- */
+function loadUpd(){
+  api('GET','/api/update',null,function(d){
+    if(!d.ok){ $('updCur').textContent='读取失败'; return; }
+    var c=d.config||{};
+    $('updMode').value=c.mode||'github';
+    $('updRepo').value=c.repo||'';
+    $('updManifest').value=c.manifest||'';
+    $('updAuto').value=c.auto?'1':'0';
+    $('updInterval').value=c.intervalH||24;
+    $('updInsecure').value=c.insecure?'1':'0';
+    $('updWebkey').value=c.webkey||'';
+    if(d.downloadDir) $('updDir').textContent=d.downloadDir;
+    updModeChange();
+    renderUpd(d);
+  });
+}
+function updModeChange(){
+  var m=$('updMode').value;
+  $('updRepoBox').style.display = m==='github'?'':'none';
+  $('updManBox').style.display = m==='manifest'?'':'none';
+}
+function renderUpd(d){
+  $('updCur').textContent='当前 '+(d.current||'?')+'（'+ (d.code||0) +'）';
+  $('updChecked').textContent=d.checkedAt?('上次检查 '+(d.iso||'')):'还没检查过';
+  var box=$('updLatest');
+  if(d.error){
+    box.innerHTML='<div class="hint" style="color:var(--err)">'+esc(d.error)+'</div>';
+    $('updApplyBtn').disabled=true; return;
+  }
+  if(!d.latest){
+    box.innerHTML='<div class="hint">点「检查更新」看看有没有新版本</div>';
+    $('updApplyBtn').disabled=true; return;
+  }
+  var chip=d.found?'<span class="chip wait">有新版本 '+esc(d.latest)+'</span>'
+                  :'<span class="chip ok">已是最新</span>';
+  var line='<div class="row" style="margin-bottom:6px">'+chip+
+    (d.size?'<span class="hint">'+fmtBytes(d.size)+'</span>':'')+
+    (d.source?'<span class="hint">源 '+esc(d.source)+'</span>':'')+'</div>';
+  if(d.sha256) line+='<div class="mono" style="font-size:11px;color:var(--dim);word-break:break-all">sha256 '+esc(d.sha256)+'</div>';
+  box.innerHTML=line;
+  $('updNotes').textContent=d.notes||'—';
+  $('updApplyBtn').disabled=!d.found;
+  if(d.phase) $('updPhase').textContent=d.phase;
+}
+function checkUpd(btn){
+  if(btn) btn.disabled=true;
+  $('updPhase').textContent='正在查询…';
+  api('POST','/api/update/check',{},function(d){
+    if(btn) btn.disabled=false;
+    $('updPhase').textContent='';
+    if(!d.ok && d.error){ toast('检查失败', true); }
+    renderUpd(d);
+    toast(d.message||d.error||'完成', !d.ok);
+  });
+}
+function applyUpd(btn){
+  if(!confirm('下载并安装新版本？安装过程服务会短暂重启')) return;
+  if(btn) btn.disabled=true;
+  $('updPhase').textContent='正在下载…';
+  api('POST','/api/update/apply',{},function(d){
+    if(btn) btn.disabled=false;
+    $('updPhase').textContent='';
+    toast(d.message||d.error||'完成', !d.ok);
+    loadUpd();
+  });
+}
+function saveUpdCfg(btn){
+  if(btn) btn.disabled=true;
+  var body={mode:$('updMode').value,repo:$('updRepo').value.trim(),
+    manifest:$('updManifest').value.trim(),auto:$('updAuto').value==='1',
+    intervalH:Number($('updInterval').value)||24,insecure:$('updInsecure').value==='1',
+    webkey:$('updWebkey').value.trim()};
+  api('POST','/api/update/config',body,function(d){
+    if(btn) btn.disabled=false;
+    toast(d.message||d.error||'已保存', !d.ok);
+    renderUpd(d);
   });
 }
 

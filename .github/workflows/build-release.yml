@@ -1,0 +1,80 @@
+name: build-release
+
+# 打 tag 触发：git tag v1.2.0 && git push origin v1.2.0
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（如 1.2.0），仅手动触发时用'
+        required: true
+        default: '1.2.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: 安装 Android 19 平台与 build-tools
+        run: |
+          sdkmanager --install "platforms;android-19" "build-tools;34.0.0" > /dev/null
+          ls "$ANDROID_SDK_ROOT/platforms/android-19/android.jar"
+
+      - name: 计算版本号
+        id: v
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            RAW="${GITHUB_REF_NAME#v}"
+          else
+            RAW="${{ inputs.version }}"
+          fi
+          IFS=. read -r MA MI PA <<< "$RAW"
+          PA=${PA:-0}
+          CODE=$((MA * 10000 + MI * 100 + PA))
+          echo "ver=$RAW" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "版本 $RAW (versionCode $CODE)"
+
+      - name: 离线测试
+        run: |
+          chmod +x build.sh tools/run-tests.sh
+          ./tools/run-tests.sh
+
+      - name: 构建 APK
+        run: |
+          ANDROID_SDK="$ANDROID_SDK_ROOT" \
+          VER="${{ steps.v.outputs.ver }}" \
+          VC="${{ steps.v.outputs.code }}" \
+          ./build.sh
+
+      - name: 校验签名
+        run: |
+          apksigner verify --print-certs dist/*.apk | head -4
+          cat dist/latest.json
+
+      - name: 发布 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.v.outputs.ver }}
+          name: v${{ steps.v.outputs.ver }}
+          generate_release_notes: true
+          body: |
+            由 GitHub Actions 构建（JDK 17 + build-tools 34 + android-19）。
+
+            设备端在面板「升级」页点「检查更新」即可，或等自动检查（默认 24 小时）。
+            安装包 SHA-256 见 `latest.json`；签名与既有安装一致，`install -r` 不会丢数据。
+          files: |
+            dist/com.sp970.smsrelay-${{ steps.v.outputs.ver }}.apk
+            dist/latest.json

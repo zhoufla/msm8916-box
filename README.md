@@ -21,17 +21,17 @@
 | `WebPanel` / `Http` | 内嵌 HTTP/1.1 服务（纯 JDK，无第三方库）+ JSON API + 静态页面，Basic 鉴权 |
 | `SysInfo` | 型号/基带/信号（rsrp+rsrq+rssnr+制式，PhoneStateListener 缓存不额外耗电）/电量/存储/流量/uptime/网卡 |
 | `WifiCtl` | 热点启停与 SSID/密码、station 开关、驱动与硬件区分、网卡 MAC/IP、ARP 客户端、扫频 |
-| `WifiCtl` | 反射调用 hidden API 启停热点、改 SSID/密码；`/proc/net/arp` 读客户端；扫频 |
+| `Update` / `Net` | 在线升级：GitHub Release 或任意 manifest；sha256 + 签名 + versionCode 三重校验；依次尝试 su / 机器自带 web 后台 root 通道 / 系统安装器 |
 | `Logs` | 内存环形日志，面板「最近日志」直读 |
 | `TestReceiver` | 调试通道（见下） |
 | 保活 | 前台通知 + START_STICKY + AlarmManager 5min 兜底 + PARTIAL_WAKE_LOCK |
 
-消息格式（钉钉，关键词校验友好）：
+转发格式默认三行（通道里可用 `template` 改，占位符 `{peer} {body} {device} {tag} {time}`）：
 
 ```
++10086
+<短信正文，多行原样保留>
 设备：158
-来自：10086
-<短信正文>
 ```
 
 验证码类短信自动提取 4~8 位数字进 `code` 字段。
@@ -87,6 +87,11 @@
 | GET | `/api/wifi` | 热点 + station + 网卡 + 客户端 + `hint` |
 | POST | `/api/wifi` | `{"action":"ap_on\|ap_off\|ap_set\|sta_on\|sta_off","ssid","pass"}`（`on/off/set` 兼容旧面板），回 `{ok,message,state}` |
 | GET | `/api/wifi/scan` | 扫频，回 `{ok,list,hint}`（station 开启时才有结果） |
+| GET | `/api/update` | 当前版本 + 上次检查结果 + 更新源配置 |
+| POST | `/api/update/check` | 查最新版本（结果落缓存，面板直接读） |
+| POST | `/api/update/apply` | 下载 + 校验 + 安装 |
+| POST | `/api/update/config` | 改更新源：`{mode,repo,manifest,auto,intervalH,insecure,webkey}` |
+| GET | `/api/update/probe?host=` | TLS 诊断：本机支持的协议/套件 + 实际握手结果 |
 | GET | `/api/logs?limit=80` | 内存日志 |
 
 `/api/wifi` 的 `state` 字段（真机实测值）：
@@ -120,12 +125,52 @@ curl -u admin:admin http://192.168.42.129:8080/api/status
 curl -u admin:admin -X POST -d '{"to":"10086","body":"1"}' http://192.168.42.129:8080/api/send
 ```
 
+## 在线升级（GitHub Actions 云编译 + 设备主动拉取）
+
+打一个 tag 就出一条 Release，设备在面板「升级」页点一下，或到点自动查（默认 24h）。
+
+```sh
+git tag v1.3.0 && git push origin v1.3.0
+```
+
+`.github/workflows/build-release.yml`：装 JDK 17 + `platforms;android-19` + `build-tools;34.0.0`
+→ 跑离线测试 → `VER=<tag> VC=<major*10000+minor*100+patch> ./build.sh`
+→ 用仓库里的 `debug.keystore` 签名（与既有安装同签名，`install -r` 不丢数据）
+→ 发布 `com.sp970.smsrelay-<ver>.apk` + `latest.json`（含 sha256）。
+
+设备端两种取法（面板可切）：
+
+| mode | 取法 | 备注 |
+|---|---|---|
+| `github` | `api.github.com/repos/<owner>/<repo>/releases/latest`；APK 走 `/releases/assets/<id>` | 不用 `browser_download_url`——那指向 github.com，这台机器连不上 |
+| `manifest` | 任意 JSON：`{"version","url","sha256","size","notes"}` | 自建镜像 / 内网 / 其他 CDN |
+
+装之前三道校验：sha256 → APK 签名必须与已装一致 → versionCode 必须更大。
+所以即使传输层被中间人替了，也装不进去。
+
+安装依次尝试三条路：
+
+1. `su -c pm install`（Magisk/SuperSU 已授权时静默）
+2. 机器自带 web 后台的 root 通道 `POST http://127.0.0.1/run`（digest，默认 `admin:admin`，
+   可用 `update.webkey` 改）——SP970 实测可用，装完在同一条命令里 `am start` 拉起
+3. 系统安装器 Intent（需手动点确认）；都不行就把 APK 留在 `/sdcard/Download`，`adb install -r` 兜底
+
+**这台机器踩到的两个坑**（代码里已处理）：
+
+- Android 4.4 的 `HttpURLConnection` 是 OkHttp 1.x，会用自己的 ConnectionSpec 覆盖
+  `setSSLSocketFactory` 里设的 TLS 版本/套件，连 GitHub 恒定 `sslv3 alert handshake failure`；
+  加上本机 Conscrypt 不带 AES-GCM 套件，现代站点基本握不上手。现在改为自写 Socket 客户端
+  （`Net`），失败时自动降到 `/system/bin/curl`（自带 OpenSSL，TLS1.2+GCM 靠它）。
+- `pm install` 会杀掉本进程，所以「装包」和「am start」必须写在同一条 root 命令里，
+  否则进程先死，重启指令发不出去。
+
 ## 构建（无 Gradle，纯 JDK + build-tools）
 
 依赖：JDK 17、`platforms;android-19`、`build-tools;34.0.0`（已装于 WSL `~/android-tools`、`~/android-sdk`）。
 
 ```sh
-sh build.sh          # 产物 dist/com.sp970.smsrelay-1.1.apk（约 57KB，自签名）
+sh build.sh                    # 产物 dist/com.sp970.smsrelay-<ver>.apk + dist/latest.json
+VER=1.4.0 VC=10400 sh build.sh  # CI 用：版本号/versionCode 从环境变量注入
 sh tools/run-tests.sh  # 离线测试：通道 JSON/钉钉载荷/验证码/退避/HTTP 服务，不需要设备
 ```
 

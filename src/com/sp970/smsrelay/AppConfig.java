@@ -38,6 +38,16 @@ public final class AppConfig {
     public String webUser = "admin";
     public String webPass = "admin";
 
+    // 在线升级：mode = off | github | manifest
+    public String updateMode = "github";
+    public String updateRepo = "zhoufla/msm8916-box";
+    public String updateManifest = "";
+    public boolean updateAuto = true;
+    public int updateIntervalH = 24;
+    public boolean updateInsecure = false;
+    /** 机器自带 web 后台的 root 通道凭据 user:pass，留空则不使用。 */
+    public String updateWebkey = "admin:admin";
+
     public static AppConfig load(Context ctx) {
         AppConfig c = new AppConfig();
         String json = currentJson(ctx);
@@ -133,6 +143,20 @@ public final class AppConfig {
                 if (pw.length() > 0) webPass = pw;
             }
 
+            JSONObject up = root.optJSONObject("update");
+            if (up != null) {
+                String m = up.optString("mode", "github");
+                if ("off".equals(m) || "github".equals(m) || "manifest".equals(m)) updateMode = m;
+                String rp = up.optString("repo", "");
+                if (rp.length() > 0) updateRepo = rp;
+                updateManifest = up.optString("manifest", updateManifest);
+                updateAuto = up.optBoolean("auto", updateAuto);
+                int ih = up.optInt("intervalH", updateIntervalH);
+                if (ih >= 1 && ih <= 24 * 30) updateIntervalH = ih;
+                updateInsecure = up.optBoolean("insecure", updateInsecure);
+                if (up.has("webkey")) updateWebkey = up.optString("webkey", "");
+            }
+
             JSONArray arr = root.optJSONArray("channels");
             if (arr == null) return;
             for (int i = 0; i < arr.length(); i++) {
@@ -221,6 +245,19 @@ public final class AppConfig {
             web.put("user", meta == null ? "admin" : meta.webUser);
             web.put("pass", meta == null ? "admin" : meta.webPass);
             root.put("web", web);
+            JSONObject up = new JSONObject();
+            up.put("mode", meta == null ? "github" : meta.updateMode);
+            up.put("repo", meta == null ? "zhoufla/msm8916-box" : meta.updateRepo);
+            if (meta != null && meta.updateManifest != null && meta.updateManifest.length() > 0) {
+                up.put("manifest", meta.updateManifest);
+            }
+            up.put("auto", meta == null || meta.updateAuto);
+            up.put("intervalH", meta == null ? 24 : meta.updateIntervalH);
+            if (meta != null && meta.updateInsecure) up.put("insecure", true);
+            if (meta != null && meta.updateWebkey != null && meta.updateWebkey.length() > 0) {
+                up.put("webkey", meta.updateWebkey);
+            }
+            root.put("update", up);
             JSONArray arr = new JSONArray();
             for (int i = 0; i < chs.size(); i++) arr.put(chs.get(i).toJson());
             root.put("channels", arr);
