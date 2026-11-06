@@ -543,40 +543,21 @@ public final class Maint {
     // ---------- #22 LED 定位 ----------
 
     /**
-     * LED 定位（torch-light，max 255）。
-     *
-     * 真机踩坑（2026-11-07 用户实测）：
-     *  1. brightness 写 7（低占空比）→ PMIC 手电电流太小，肉眼看是「一直闪烁」——亮用 255 全亮；
-     *  2. ⚠ flashlight-trigger 是手电模式的【点亮开关】不是干扰源：torch-light/brightness
-     *     只有在 flashlight 节点挂着 flashlight-trigger 时才会真正出光（摘了 trigger 写 255
-     *     寄存器有值但物理灯不亮）。但它又会把灯锁在常亮——torch 写 0 不灭（「灭=常亮」）。
-     *     所以：亮/闪先重新挂 trigger，灭 = 摘 trigger + 两个节点清零；
-     *  3. toolbox 的 sleep 只吃整数，sleep 0.3 直接报错 → 闪烁节奏全乱（8 下变 4 下）——
-     *     必须用 /system/xbin/busybox sleep（支持小数）。
+     * LED 定位（torch-light）。
+     * ⚠ 回退到最初版本做基线对比（2026-11-07 用户要求）：
+     * 写 7、toolbox sleep 0.3、不动 trigger。行为记录：
+     *  亮=闪烁 / 灭=常亮 / 闪8下只见4下——用这个基线与各修正版对照，定位真实模型。
      */
     public static JSONObject led(Context ctx, String action) {
         JSONObject o = new JSONObject();
         try {
-            String torch = "/sys/class/leds/torch-light";
-            String flash = "/sys/class/leds/flashlight";
-            String BS = "/system/xbin/busybox";
-            String arm = "echo flashlight-trigger > " + flash + "/trigger 2>/dev/null;";
-            String strip = "echo none > " + flash + "/trigger 2>/dev/null;";
-            String clear = " echo 0 > " + torch + "/brightness; echo 0 > " + flash + "/brightness;";
+            String node = "/sys/class/leds/torch-light/brightness";
             String cmd;
-            if ("on".equals(action)) {
-                cmd = arm + " echo 255 > " + torch + "/brightness";
-            } else if ("off".equals(action)) {
-                cmd = strip + clear;
-            } else if ("blink".equals(action)) {
-                StringBuilder sb = new StringBuilder("(").append(arm);
-                for (int i = 0; i < 8; i++) {
-                    sb.append(" echo 255 > ").append(torch).append("/brightness; ")
-                      .append(BS).append(" sleep 0.3; echo 0 > ").append(torch)
-                      .append("/brightness; ").append(BS).append(" sleep 0.3;");
-                }
-                sb.append(strip).append(clear).append(") >/dev/null 2>&1 & echo SENT");
-                cmd = sb.toString();
+            if ("on".equals(action)) cmd = "echo 7 > " + node;
+            else if ("off".equals(action)) cmd = "echo 0 > " + node;
+            else if ("blink".equals(action)) {
+                cmd = "(for i in 1 2 3 4 5 6 7 8; do echo 7 > " + node
+                        + "; sleep 0.3; echo 0 > " + node + "; sleep 0.3; done) >/dev/null 2>&1 & echo SENT";
             } else throw new IllegalArgumentException("action 只能是 on / off / blink");
             Root.Result r = Root.exec(ctx, cmd);
             o.put("ok", r.ok());
