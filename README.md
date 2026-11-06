@@ -1,7 +1,10 @@
-# smsrelay — SP970 随身 WiFi 短信转发网关
+# sp970box — SP970 随身 WiFi 管理套件
 
-运行于 SP970-B（MSM8916，Android 4.4.4 eng/root）的系统级短信转发器。
-SIM 收到的短信实时转发到钉钉机器人 / 自建 webhook，断网退避重试、开机自启、免 root 依赖（但设备本身 root）。
+SP970-B（MSM8916，Android 4.4.4 eng/root）随身 WiFi 棒子的设备管理套件。
+**短信网关**是第一个落地的模块：SIM 收到的短信实时转发到钉钉机器人 / 自建 webhook，
+断网退避重试、开机自启。后续模块（Web 面板、短信发送、系统信息、WiFi 控制）见路线图。
+
+> 定位：把一根只当热点用的棒子，变成可远程管理的短信网关 + 设备面板。
 
 ## 当前功能
 
@@ -65,7 +68,7 @@ adb shell am broadcast -a com.sp970.smsrelay.TEST --ez importinbox true
 - root 救援通道：webkey 后台 `POST http://192.168.42.129/run`（Digest admin/admin，uid=0）
 - 镜像工具：`tools/patch-system-img.sh`（debugfs 离线删应用/注入 APK）、`tools/remove-vendor.txt`（删除清单）
 
-## 路线图（计划中）
+## 路线图（sp970box 计划中）
 
 - [ ] **Web 面板**：App 内嵌 HTTP 服务（端口 8080+），浏览器直连 192.168.42.129 管理
   - 收件箱浏览 / 转发记录（ev+dl 表可视化）/ 实时状态
