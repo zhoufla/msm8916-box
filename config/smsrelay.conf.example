@@ -1,1 +1,1 @@
-{"device":"158","channels":[{"name":"dingtalk","type":"dingtalk","url":"https://oapi.dingtalk.com/robot/send?access_token=a7b4b884e4abb1d22c2316f5c4f94b88696a0f6321ad51b7f5769d37be1ea7ca","prefix":"设备：158\n来自：","enabled":true}]}
+{"device":"158","web":{"enabled":true,"port":8080,"user":"admin","pass":"admin"},"channels":[{"name":"dingtalk","type":"dingtalk","url":"https://oapi.dingtalk.com/robot/send?access_token=a7b4b884e4abb1d22c2316f5c4f94b88696a0f6321ad51b7f5769d37be1ea7ca","prefix":"设备：158\n来自：","enabled":true}]}

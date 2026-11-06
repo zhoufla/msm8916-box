@@ -16,10 +16,12 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 多通道配置。
+ * 多通道配置 + 面板配置。
  *
  * 优先级：/sdcard/smsrelay.conf > SharedPreferences > 内置示例。
- * conf 是 JSON：{"device":"SP970","channels":[{...},{...}]}
+ * conf 是 JSON：
+ *   {"device":"158","web":{"enabled":true,"port":8080,"user":"admin","pass":"admin"},
+ *    "channels":[{...},{...}]}
  * 同时兼容旧的单通道 key=value 写法。
  */
 public final class AppConfig {
@@ -31,27 +33,55 @@ public final class AppConfig {
     public String device = Build.MODEL;
     public List<Channel> channels = new ArrayList<Channel>();
 
+    public boolean webEnabled = true;
+    public int webPort = 8080;
+    public String webUser = "admin";
+    public String webPass = "admin";
+
     public static AppConfig load(Context ctx) {
         AppConfig c = new AppConfig();
-        String json = readConfFile();
-        if (json == null) json = prefs(ctx).getString(KEY_JSON, null);
+        String json = currentJson(ctx);
         if (json != null) c.parse(json);
         if (c.channels.isEmpty()) c.migrateLegacy(ctx);
         if (c.channels.isEmpty()) c.parse(sampleJson());
         return c;
     }
 
-    /** 界面展示用：当前生效的原始 JSON。 */
+    /** 当前生效的原始 JSON 文本（面板展示/编辑用）。 */
     public static String effectiveJson(Context ctx) {
+        String json = currentJson(ctx);
+        if (json != null) return json;
+        AppConfig c = new AppConfig();
+        c.migrateLegacy(ctx);
+        if (!c.channels.isEmpty()) return toJsonString(c.device, c.channels, c);
+        return sampleJson();
+    }
+
+    private static String currentJson(Context ctx) {
         String json = readConfFile();
         if (json == null) json = prefs(ctx).getString(KEY_JSON, null);
-        if (json == null) {
-            AppConfig c = new AppConfig();
-            c.migrateLegacy(ctx);
-            if (!c.channels.isEmpty()) return toJsonString(c.device, c.channels);
-            return sampleJson();
-        }
         return json;
+    }
+
+    /**
+     * 保存配置。
+     * 注意：/sdcard/smsrelay.conf 存在时优先级最高，只写 SharedPreferences 会被它覆盖，
+     * 所以文件存在就一起写，否则面板上改了等于没改。
+     */
+    public static void saveEffective(Context ctx, String json) {
+        saveJson(ctx, json);
+        File f = new File(Environment.getExternalStorageDirectory(), CONF_NAME);
+        if (!f.exists()) return;
+        FileWriter w = null;
+        try {
+            w = new FileWriter(f);
+            w.write("# 由面板写入，改完重启服务生效\n");
+            w.write(json);
+            w.write("\n");
+        } catch (Throwable ignored) {
+        } finally {
+            try { if (w != null) w.close(); } catch (Throwable ignored) {}
+        }
     }
 
     public static void saveJson(Context ctx, String json) {
@@ -91,6 +121,18 @@ public final class AppConfig {
             JSONObject root = new JSONObject(json);
             String d = root.optString("device", "");
             if (d.length() > 0) device = d;
+
+            JSONObject web = root.optJSONObject("web");
+            if (web != null) {
+                webEnabled = web.optBoolean("enabled", true);
+                int p = web.optInt("port", 8080);
+                if (p > 0 && p < 65536) webPort = p;
+                String u = web.optString("user", "");
+                if (u.length() > 0) webUser = u;
+                String pw = web.optString("pass", "");
+                if (pw.length() > 0) webPass = pw;
+            }
+
             JSONArray arr = root.optJSONArray("channels");
             if (arr == null) return;
             for (int i = 0; i < arr.length(); i++) {
@@ -115,7 +157,7 @@ public final class AppConfig {
                 c.type = "webhook";
                 c.url = readLegacyFileUrl();
                 channels.add(c);
-                saveJson(ctx, toJsonString(device, channels));
+                saveJson(ctx, toJsonString(device, channels, this));
             }
             return;
         }
@@ -127,7 +169,7 @@ public final class AppConfig {
         c.token = sp.getString("token", "");
         c.prefix = sp.getString("prefix", "【短信】");
         channels.add(c);
-        saveJson(ctx, toJsonString(device, channels));
+        saveJson(ctx, toJsonString(device, channels, this));
     }
 
     private static String readLegacyFileUrl() {
@@ -169,10 +211,16 @@ public final class AppConfig {
         }
     }
 
-    public static String toJsonString(String device, List<Channel> chs) {
+    public static String toJsonString(String device, List<Channel> chs, AppConfig meta) {
         try {
             JSONObject root = new JSONObject();
             root.put("device", device);
+            JSONObject web = new JSONObject();
+            web.put("enabled", meta == null || meta.webEnabled);
+            web.put("port", meta == null ? 8080 : meta.webPort);
+            web.put("user", meta == null ? "admin" : meta.webUser);
+            web.put("pass", meta == null ? "admin" : meta.webPass);
+            root.put("web", web);
             JSONArray arr = new JSONArray();
             for (int i = 0; i < chs.size(); i++) arr.put(chs.get(i).toJson());
             root.put("channels", arr);
@@ -185,6 +233,7 @@ public final class AppConfig {
     public static String sampleJson() {
         return "{\n" +
                 "  \"device\": \"" + Build.MODEL + "\",\n" +
+                "  \"web\": {\"enabled\": true, \"port\": 8080, \"user\": \"admin\", \"pass\": \"admin\"},\n" +
                 "  \"channels\": [\n" +
                 "    {\n" +
                 "      \"name\": \"运维群\",\n" +
