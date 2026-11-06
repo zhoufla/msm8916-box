@@ -45,8 +45,20 @@ public final class AppConfig {
     public boolean updateAuto = true;
     public int updateIntervalH = 24;
     public boolean updateInsecure = false;
-    /** 机器自带 web 后台的 root 通道凭据 user:pass，留空则不使用。 */
-    public String updateWebkey = "admin:admin";
+
+    // root 执行通道（设备侧 relay-helper，只听 127.0.0.1:8899）
+    // 取代了原来的 update.webkey：一套凭据、单端口，不需要 Digest，也不需要 su。
+    public String helperUrl = "http://127.0.0.1:8899";
+    public String helperToken = "sp970-relay-2026";
+
+    // 维护段
+    public boolean maintHealthEnabled = true;
+    public int maintHealthIntervalMin = 30;
+
+    // SIM 锁（B2 第 16 项）：ICCID 白名单。action = log（只记录）/ block（停止转发）
+    public boolean simLockEnabled = false;
+    public String simLockAction = "log";
+    public String simLockList = "";
 
     public static AppConfig load(Context ctx) {
         AppConfig c = new AppConfig();
@@ -114,6 +126,18 @@ public final class AppConfig {
         return out;
     }
 
+    /** SIM 白名单：逗号/空格/分号分隔都认，整串 ICCID 或末 4 位都行。 */
+    public List<String> iccids() {
+        List<String> out = new ArrayList<String>();
+        if (simLockList == null || simLockList.trim().length() == 0) return out;
+        String[] parts = simLockList.split("[,，;；\\s]+");
+        for (int i = 0; i < parts.length; i++) {
+            String s = parts[i].trim();
+            if (s.length() > 0 && !out.contains(s)) out.add(s);
+        }
+        return out;
+    }
+
     public int activeCount() {
         int n = 0;
         for (int i = 0; i < channels.size(); i++) if (channels.get(i).valid()) n++;
@@ -154,7 +178,43 @@ public final class AppConfig {
                 int ih = up.optInt("intervalH", updateIntervalH);
                 if (ih >= 1 && ih <= 24 * 30) updateIntervalH = ih;
                 updateInsecure = up.optBoolean("insecure", updateInsecure);
-                if (up.has("webkey")) updateWebkey = up.optString("webkey", "");
+                // 旧版 update.webkey 已废弃：不再读取，残留字段直接忽略
+            }
+
+            JSONObject hp = root.optJSONObject("helper");
+            if (hp != null) {
+                String u = hp.optString("url", "");
+                if (u.startsWith("http://127.0.0.1:")) helperUrl = u;
+                String t = hp.optString("token", "");
+                if (t.length() > 0) helperToken = t;
+            }
+
+            JSONObject mt = root.optJSONObject("maint");
+            if (mt != null) {
+                maintHealthEnabled = mt.optBoolean("healthEnabled", maintHealthEnabled);
+                int g = mt.optInt("healthIntervalMin", maintHealthIntervalMin);
+                if (g >= 1 && g <= 24 * 60) maintHealthIntervalMin = g;
+            }
+
+            JSONObject sl = root.optJSONObject("simLock");
+            if (sl != null) {
+                simLockEnabled = sl.optBoolean("enabled", simLockEnabled);
+                String a = sl.optString("action", simLockAction);
+                if ("log".equals(a) || "block".equals(a)) simLockAction = a;
+                JSONArray wl = sl.optJSONArray("list");
+                if (wl != null) {
+                    StringBuilder sb = new StringBuilder();
+                    for (int i = 0; i < wl.length(); i++) {
+                        String s = wl.optString(i, "").trim();
+                        if (s.length() == 0) continue;
+                        if (sb.length() > 0) sb.append(',');
+                        sb.append(s);
+                    }
+                    simLockList = sb.toString();
+                } else {
+                    String raw = sl.optString("list", "");
+                    if (raw.length() > 0) simLockList = raw;
+                }
             }
 
             JSONArray arr = root.optJSONArray("channels");
@@ -254,10 +314,25 @@ public final class AppConfig {
             up.put("auto", meta == null || meta.updateAuto);
             up.put("intervalH", meta == null ? 24 : meta.updateIntervalH);
             if (meta != null && meta.updateInsecure) up.put("insecure", true);
-            if (meta != null && meta.updateWebkey != null && meta.updateWebkey.length() > 0) {
-                up.put("webkey", meta.updateWebkey);
-            }
             root.put("update", up);
+            JSONObject hp = new JSONObject();
+            hp.put("url", meta == null ? "http://127.0.0.1:8899" : meta.helperUrl);
+            hp.put("token", meta == null ? "sp970-relay-2026" : meta.helperToken);
+            root.put("helper", hp);
+            JSONObject mt = new JSONObject();
+            mt.put("healthEnabled", meta == null || meta.maintHealthEnabled);
+            mt.put("healthIntervalMin", meta == null ? 30 : meta.maintHealthIntervalMin);
+            root.put("maint", mt);
+            JSONObject sl = new JSONObject();
+            sl.put("enabled", meta != null && meta.simLockEnabled);
+            sl.put("action", meta == null ? "log" : meta.simLockAction);
+            JSONArray wl = new JSONArray();
+            if (meta != null) {
+                List<String> ids = meta.iccids();
+                for (int i = 0; i < ids.size(); i++) wl.put(ids.get(i));
+            }
+            sl.put("list", wl);
+            root.put("simLock", sl);
             JSONArray arr = new JSONArray();
             for (int i = 0; i < chs.size(); i++) arr.put(chs.get(i).toJson());
             root.put("channels", arr);

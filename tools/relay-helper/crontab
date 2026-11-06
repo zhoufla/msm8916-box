@@ -1,0 +1,5 @@
+# relay-helper 定时任务（busybox crond，root 执行）
+# 格式：分 时 日 月 周 命令
+# 面板「维护 → 定时任务」可直接编辑本文件，保存后 30s 内自动重载。
+# 默认只做无害的体检落盘；需要定时重启热点/补收时再加行。
+0 4 * * * /system/bin/sh /system/etc/relay-helper/bin/health.sh >> /sdcard/Download/smsrelay-health.log 2>&1

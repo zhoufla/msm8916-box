@@ -567,6 +567,223 @@ public final class WifiCtl {
         return 0;
     }
 
+    // ---------- 无线高级项（B2 第 19 项） ----------
+    //
+    // 真机实测（SP970-B / 4.4.4 / QCA pronto + 裁剪版 hostapd）：
+    //  - hostapd 的 ctrl socket 在 /data/misc/wifi/hostapd/wlan0，必须用 -p 指定目录，
+    //    否则 hostapd_cli 走默认路径连不上，会被误判成「热点没开」
+    //  - 这个 hostapd 构建只有 mib / sta / all_sta / deauthenticate / disassociate /
+    //    sa_query / wps_* / get_config —— 没有 set、没有 reload、没有 status
+    //    （`set channel 11` 会回 OK，但那是未识别命令的空应答，不能当成功）
+    //  - AP 模式下 iwpriv 换了一套 ioctl：hideSSID / setMaxAssoc / setAutoChannel /
+    //    setClearAcl 可用；setMaxTxPower、setsapchannels 全是 Invalid command
+    //
+    // 所以这里只做四件**真能生效**的事；改信道 / 改功率 / MAC 白名单明确不做 ——
+    // 框架每次开热点都会重写 hostapd.conf，改了会被覆盖，做了等于骗人。
+    private static final String HAPD = "/system/bin/hostapd_cli";
+    private static final String HAPD_DIR = "/data/misc/wifi/hostapd";
+
+    private static final String HAPD_CMD = HAPD + " -i wlan0 -p " + HAPD_DIR + " ";
+
+    /** 无线详情：热点配置（只读）、关联客户端、驱动侧限制。 */
+    public static JSONObject advInfo(Context ctx) {
+        JSONObject o = new JSONObject();
+        try {
+            String cmd =
+                    "echo '##SOCK'; ls " + HAPD_DIR + "/wlan0 2>/dev/null; " +
+                    "echo '##CONMODE'; cat /sys/module/wlan/parameters/con_mode 2>/dev/null; " +
+                    "echo '##MAXASSOC'; iwpriv wlan0 getMaxAssoc 2>&1; " +
+                    "echo '##AUTOCH'; iwpriv wlan0 getAutoChannel 2>&1; " +
+                    "echo '##GETCFG'; " + HAPD_CMD + "get_config 2>&1; " +
+                    "echo '##STA'; " + HAPD_CMD + "all_sta 2>&1; " +
+                    "echo '##END'";
+            Root.Result r = Root.exec(ctx, cmd);
+            if (r.error.length() > 0) throw new IllegalStateException(r.error);
+
+            String out = r.out;
+            boolean sock = sec(out, "SOCK").trim().length() > 0;
+            o.put("ok", true);
+            o.put("hostapdOk", sock);
+            o.put("conMode", sec(out, "CONMODE").trim());
+            o.put("maxAssoc", digits(sec(out, "MAXASSOC")));
+            o.put("autoChannel", digits(sec(out, "AUTOCH")));
+
+            String cfg = sec(out, "GETCFG").trim();
+            String[][] kv = new String[][]{{"ssid", "ssid"}, {"bssid", "bssid"},
+                    {"key_mgmt", "keyMgmt"}, {"channel", "channel"}, {"hw_mode", "hwMode"}};
+            JSONObject conf = new JSONObject();
+            for (int i = 0; i < kv.length; i++) {
+                String v = kvOf(cfg, kv[i][0]);
+                if (v.length() > 0) conf.put(kv[i][1], v);
+            }
+            o.put("config", conf);
+
+            // all_sta：每个客户端一段，第一行是 MAC
+            JSONArray clients = new JSONArray();
+            String sta = sec(out, "STA");
+            String[] lines = sta.replace("\r", "").split("\n");
+            JSONObject cur = null;
+            for (int i = 0; i < lines.length; i++) {
+                String line = lines[i].trim();
+                if (line.length() == 0) continue;
+                if (macOf(line).equals(line.toLowerCase()) && line.indexOf('=') < 0) {
+                    cur = new JSONObject();
+                    cur.put("mac", line.toLowerCase());
+                    clients.put(cur);
+                } else if (cur != null && line.indexOf('=') > 0) {
+                    int e = line.indexOf('=');
+                    String k = line.substring(0, e).trim();
+                    String v = line.substring(e + 1).trim();
+                    if (k.equals("rssi") || k.equals("aid") || k.equals("flags")) cur.put(k, v);
+                }
+            }
+            o.put("clients", clients);
+            o.put("hint", sock ? "" : "热点没开：hostapd 没有控制 socket，先开热点再来");
+        } catch (Throwable t) {
+            try {
+                o.put("ok", false);
+                o.put("message", root(t));
+            } catch (Throwable ignored) {
+            }
+        }
+        return o;
+    }
+
+    /**
+     * 无线高级动作（都要求热点正在运行）：
+     *  hide     <0|1>  隐藏 SSID（iwpriv hideSSID）
+     *  maxassoc <1-32> 最大关联客户端数（iwpriv setMaxAssoc）
+     *  autoch   <0|1>  驱动自动选信道开关（iwpriv setAutoChannel）
+     *  kick     <mac>  踢掉一个客户端（hostapd_cli deauthenticate）
+     */
+    public static JSONObject advApply(Context ctx, String action, String arg, String arg2) {
+        JSONObject o = new JSONObject();
+        action = action == null ? "" : action.trim();
+        try {
+            if ("kick".equals(action)) {
+                String mac = macOf(arg);
+                if (mac.length() == 0) throw new IllegalArgumentException("MAC 格式不对");
+                requireAp(ctx);
+                Root.Result r = Root.exec(ctx, HAPD_CMD + "deauthenticate " + mac + " 2>&1");
+                boolean ok = r.out.indexOf("OK") >= 0;
+                Logs.add("wifi", "踢客户端 " + mac + " → " + (ok ? "OK" : r.out.trim()));
+                o.put("ok", ok);
+                o.put("message", ok ? ("已踢掉 " + mac + "（它会自动重连一次）")
+                        : ("踢除失败：" + r.out.trim()));
+                return o;
+            }
+
+            if ("hide".equals(action)) {
+                // arg=1 是隐藏（对应 hostapd 的 ignore_broadcast_ssid=1），0 是正常广播
+                boolean hide = "1".equals(arg == null ? "" : arg.trim());
+                requireAp(ctx);
+                Root.Result r = Root.exec(ctx, "iwpriv wlan0 hideSSID " + (hide ? 1 : 0) + " 2>&1");
+                Logs.add("wifi", "隐藏 SSID → " + hide);
+                return ok(o, r, hide ? "SSID 已隐藏（要手动输名字才能连）" : "SSID 已恢复广播",
+                        r.out.indexOf("Invalid") >= 0);
+            }
+
+            if ("maxassoc".equals(action)) {
+                int n = Integer.parseInt(arg == null ? "" : arg.trim());
+                if (n < 1 || n > 32) throw new IllegalArgumentException("最大关联数要在 1–32");
+                requireAp(ctx);
+                Root.Result r = Root.exec(ctx, "iwpriv wlan0 setMaxAssoc " + n + " 2>&1");
+                String now = digits(Root.exec(ctx, "iwpriv wlan0 getMaxAssoc 2>&1").out);
+                boolean good = now.equals(String.valueOf(n));
+                o.put("ok", good);
+                o.put("maxAssoc", now);
+                o.put("message", good ? ("最大关联数已设为 " + n)
+                        : ("设置未生效，当前 " + now + (r.out.trim().length() > 0 ? "：" + r.out.trim() : "")));
+                Logs.add("wifi", "最大关联数 → " + now);
+                return o;
+            }
+
+            if ("autoch".equals(action)) {
+                boolean on = !"0".equals(arg == null ? "" : arg.trim());
+                requireAp(ctx);
+                Root.Result r = Root.exec(ctx, "iwpriv wlan0 setAutoChannel " + (on ? 1 : 0) + " 2>&1");
+                String now = digits(Root.exec(ctx, "iwpriv wlan0 getAutoChannel 2>&1").out);
+                o.put("ok", r.ok());
+                o.put("autoChannel", now);
+                o.put("message", "驱动自动选信道已" + (on ? "开启" : "关闭") + "（当前 " + now + "）");
+                Logs.add("wifi", "自动信道 → " + on);
+                return o;
+            }
+
+            throw new IllegalArgumentException("未知无线动作：" + action);
+        } catch (Throwable t) {
+            try {
+                o.put("ok", false);
+                o.put("message", root(t));
+            } catch (Throwable ignored) {
+            }
+        }
+        return o;
+    }
+
+    private static JSONObject ok(JSONObject o, Root.Result r, String msg, boolean bad) {
+        try {
+            o.put("ok", !bad && r.error.length() == 0);
+            o.put("message", bad ? "这台固件的驱动不支持这个命令：" + r.out.trim() : msg);
+            if (r.out.trim().length() > 0) o.put("detail", clip(r.out.trim(), 300));
+        } catch (Throwable ignored) {
+        }
+        return o;
+    }
+
+    /** 热点没开就别往下走：socket 不在，hostapd_cli 一律连不上。 */
+    private static void requireAp(Context ctx) {
+        Root.Result r = Root.exec(ctx, "ls " + HAPD_DIR + "/wlan0 2>/dev/null");
+        if (r.out.trim().length() == 0) {
+            throw new IllegalStateException("热点没开：hostapd 没有控制 socket，先开热点再试");
+        }
+    }
+
+    private static String sec(String out, String name) {
+        String tag = "##" + name;
+        int i = out.indexOf(tag + "\n");
+        if (i < 0) return "";
+        int start = i + tag.length() + 1;
+        int end = out.indexOf("\n##", start);
+        if (end < 0) end = out.length();
+        return out.substring(start, end);
+    }
+
+    private static String clip(String s, int max) {
+        return s.length() > max ? s.substring(0, max) + "…" : s;
+    }
+
+    private static String kvOf(String block, String key) {
+        String[] lines = block.replace("\r", "").split("\n");
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i].trim();
+            if (line.startsWith(key + "=")) return line.substring(key.length() + 1).trim();
+        }
+        return "";
+    }
+
+    /** 从 "wlan0 getMaxAssoc:10" 里取数字。 */
+    private static String digits(String s) {
+        if (s == null) return "";
+        int c = s.lastIndexOf(':');
+        String v = (c >= 0 ? s.substring(c + 1) : s).trim();
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < v.length(); i++) {
+            char ch = v.charAt(i);
+            if (ch >= '0' && ch <= '9') sb.append(ch);
+            else break;
+        }
+        return sb.length() > 0 ? sb.toString() : v;
+    }
+
+    /** 从任意一行里抠出第一个 MAC 地址，非法回空串。 */
+    private static String macOf(String s) {
+        if (s == null) return "";
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}").matcher(s);
+        return m.find() ? m.group(0).toLowerCase() : "";
+    }
+
     // ---------- 工具 ----------
 
     private static String root(Throwable t) {

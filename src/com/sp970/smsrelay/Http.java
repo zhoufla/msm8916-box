@@ -86,7 +86,9 @@ public final class Http {
     }
 
     private static final int MAX_HEAD = 16 * 1024;
-    private static final int MAX_BODY = 256 * 1024;
+    // 维护页的命令框 / crontab 编辑器会提交稍大的纯文本；仍然不做 multipart，
+    // 文件上传交给 adb push 或升级通道，二进制下载走 Resp.bytes()。
+    private static final int MAX_BODY = 512 * 1024;
     private static final int MAX_CONN = 24;
 
     private final int wantPort;

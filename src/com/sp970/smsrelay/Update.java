@@ -406,31 +406,26 @@ public final class Update {
     }
 
     /**
-     * 装包三条路，按可靠性排序：
-     *  1. su -c pm install（有 Magisk/SuperSU 授权就是静默的）
-     *  2. 机器自带 web 后台的 root 通道（这台 SP970 的 http://127.0.0.1/run，digest 后以 root 执行；
-     *     只发一条短命令，不传大 body —— 这个通道传大数据会把整机搞掉线）
-     *  3. 系统安装器 Intent（要人点确认）
+     * 装包两条路：
+     *  1. relay-helper root 通道（pm install -r -d）——静默、自动拉起，正常路径
+     *  2. 系统安装器 Intent（要人点确认）——helper 没部署时的兜底
+     *
+     * 注意：装包会杀掉本进程，所以 pm install 与 am start 必须拼在同一条 root 命令里，
+     * helper 是独立的 root 进程，本 app 死了它照样能执行完 am start。
+     * 固件 su 只放行 uid 0/2000，uid 10075 提不了权，那条分支已彻底删除；
+     * 机器自带 webkey 的 /run + Digest 也不再使用。
      */
     private static String install(Context ctx, File apk) {
         String path = apk.getAbsolutePath();
-        // 装包会把本进程杀掉，所以 pm install 和 am start 必须同一条命令里发出去，
-        // 否则进程死了，后面的 am start 根本发不出来（实测面板会一直停着）。
         String chain = "pm install -r -d " + path + "; sleep 2; am start -n "
                 + ctx.getPackageName() + "/.MainActivity";
-        String out = root(chain);
-        if (out.toLowerCase(Locale.US).contains("success")) {
-            return "已用 root 静默安装，服务会自动重启";
+        Root.Result r = Root.exec(ctx, chain);
+        if (r.ok() && r.out.toLowerCase(Locale.US).contains("success")) {
+            return "已通过 relay-helper 静默安装，服务会自动重启";
         }
-        String why = out.length() > 0 ? out.trim() : "su 不可用";
-
-        String wk = webkey(ctx, chain);
-        if (wk.toLowerCase(Locale.US).contains("success")) {
-            return "已通过机器自带 web 后台（root 通道）静默安装，服务会自动重启";
-        }
-        if (wk.length() > 0) why = why + "；webkey: " + wk.trim();
+        String why = (r.error.length() > 0 ? r.error : r.out).trim();
+        if (why.length() == 0) why = "helper 不可用（exit=" + r.exit + "）";
         if (why.length() > 120) why = why.substring(0, 120) + "…";
-        // 交给系统安装器：4.4 上会弹一次确认
         try {
             Intent i = new Intent(Intent.ACTION_VIEW);
             i.setDataAndType(Uri.fromFile(apk), "application/vnd.android.package-archive");
@@ -441,158 +436,6 @@ public final class Update {
             return "已下载到 " + path + "，需要手动安装：adb install -r " + path
                     + "（静默安装失败：" + why + "）";
         }
-    }
-
-    /** 用 su 跑一条命令，返回合并输出；拿不到 root 就返回原因。 */
-    private static String root(String cmd) {
-        Process p = null;
-        try {
-            p = new ProcessBuilder("/system/bin/sh", "-c",
-                    "su -c \"" + cmd.replace("\"", "\\\"") + "\"")
-                    .redirectErrorStream(true).start();
-            final Process fp = p;
-            final StringBuilder sb = new StringBuilder();
-            Thread reader = new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    InputStream in = fp.getInputStream();
-                    try {
-                        byte[] b = new byte[512];
-                        int n;
-                        while ((n = in.read(b)) > 0) sb.append(new String(b, 0, n, "UTF-8"));
-                    } catch (Throwable ignored) {
-                    }
-                }
-            });
-            reader.setDaemon(true);
-            reader.start();
-            long deadline = System.currentTimeMillis() + 120000;
-            while (System.currentTimeMillis() < deadline) {
-                try {
-                    int code = p.exitValue();
-                    reader.join(2000);
-                    return "exit=" + code + " " + sb.toString().trim();
-                } catch (IllegalThreadStateException alive) {
-                    Thread.sleep(500);
-                }
-            }
-            p.destroy();
-            return "超时 " + sb.toString().trim();
-        } catch (Throwable t) {
-            return msg(t);
-        } finally {
-            if (p != null) {
-                try {
-                    p.destroy();
-                } catch (Throwable ignored) {
-                }
-            }
-        }
-    }
-
-    /**
-     * 走本机 web 后台的 /run 通道执行 root 命令（这台机器上是 root 身份）。
-     *
-     * 只能用 digest：Android 4.4 的 HttpURLConnection 是 OkHttp 1.x，根本不实现 Digest，
-     * java.net.Authenticator 设了也没用（会一直 401）。这里自己算：
-     *   HA1 = MD5(user:realm:pass)，HA2 = MD5(POST:uri)
-     *   response = MD5(HA1:nonce:nc:cnonce:qop:HA2)
-     */
-    private static String webkey(Context ctx, String cmd) {
-        AppConfig cfg = AppConfig.load(ctx);
-        String cred = cfg.updateWebkey;
-        if (cred == null || cred.indexOf(':') <= 0) return "";
-        String user = cred.substring(0, cred.indexOf(':'));
-        String pass = cred.substring(cred.indexOf(':') + 1);
-        String uri = "/run";
-        try {
-            // 1) 先探一下挑战
-            java.net.HttpURLConnection probe = post("http://127.0.0.1" + uri, cmd, null);
-            int code = probe.getResponseCode();
-            if (code == 200) return readBody(probe);
-            String www = probe.getHeaderField("WWW-Authenticate");
-            try {
-                probe.disconnect();
-            } catch (Throwable ignored) {
-            }
-            if (www == null || !www.toLowerCase(Locale.US).contains("digest")) {
-                Logs.add("update", "webkey 需要 digest，但服务端回了: " + www);
-                return "";
-            }
-            String realm = param(www, "realm");
-            String nonce = param(www, "nonce");
-            String qop = param(www, "qop");
-            if (qop == null || qop.length() == 0) qop = "auth";
-            String nc = "00000001";
-            String cnonce = Long.toHexString(System.currentTimeMillis());
-            String ha1 = MD5.of(user + ":" + realm + ":" + pass);
-            String ha2 = MD5.of("POST:" + uri);
-            String resp = MD5.of(ha1 + ":" + nonce + ":" + nc + ":" + cnonce + ":" + qop + ":" + ha2);
-            String auth = "Digest username=\"" + user + "\", realm=\"" + realm
-                    + "\", nonce=\"" + nonce + "\", uri=\"" + uri + "\", algorithm=MD5"
-                    + ", response=\"" + resp + "\", qop=" + qop + ", nc=" + nc
-                    + ", cnonce=\"" + cnonce + "\"";
-
-            // 2) 带签名重试
-            java.net.HttpURLConnection c = post("http://127.0.0.1" + uri, cmd, auth);
-            int c2 = c.getResponseCode();
-            String body = readBody(c);
-            try {
-                c.disconnect();
-            } catch (Throwable ignored) {
-            }
-            Logs.add("update", "webkey " + cmd + " → HTTP " + c2 + " "
-                    + (body.length() > 60 ? body.substring(0, 60) : body));
-            return c2 == 200 ? body : "";
-        } catch (Throwable t) {
-            Logs.add("update", "webkey 失败：" + msg(t));
-            return "";
-        }
-    }
-
-    private static java.net.HttpURLConnection post(String url, String body, String auth)
-            throws Exception {
-        java.net.HttpURLConnection c = (java.net.HttpURLConnection)
-                new java.net.URL(url).openConnection();
-        c.setConnectTimeout(8000);
-        c.setReadTimeout(180000);
-        c.setRequestMethod("POST");
-        c.setDoOutput(true);
-        c.setRequestProperty("Content-Type", "text/plain; charset=utf-8");
-        if (auth != null) c.setRequestProperty("Authorization", auth);
-        c.getOutputStream().write(body.getBytes("UTF-8"));
-        c.getOutputStream().flush();
-        return c;
-    }
-
-    private static String readBody(java.net.HttpURLConnection c) {
-        try {
-            java.io.InputStream in = c.getResponseCode() >= 400
-                    ? c.getErrorStream() : c.getInputStream();
-            if (in == null) return "";
-            java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
-            byte[] b = new byte[1024];
-            int n;
-            while ((n = in.read(b)) > 0) bo.write(b, 0, n);
-            in.close();
-            return new String(bo.toByteArray(), "UTF-8");
-        } catch (Throwable t) {
-            return "";
-        }
-    }
-
-    /** 从 WWW-Authenticate 里抠 key="value"。 */
-    private static String param(String header, String key) {
-        String k = key + "=";
-        int i = header.toLowerCase(Locale.US).indexOf(k);
-        if (i < 0) return "";
-        String rest = header.substring(i + k.length()).trim();
-        if (rest.startsWith("\"")) {
-            int e = rest.indexOf('"', 1);
-            return e > 0 ? rest.substring(1, e) : "";
-        }
-        int e = rest.indexOf(',');
-        return (e > 0 ? rest.substring(0, e) : rest).trim();
     }
 
     private static boolean sameSig(PackageInfo a, PackageInfo b) {

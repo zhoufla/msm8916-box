@@ -1,0 +1,5 @@
+# --- relay-helper autostart BEGIN (must stay BEFORE the two long loops) ---
+# 通用 root 命令通道：busybox httpd 只听 127.0.0.1:8899，CGI 由 init(root) 执行。
+# 后面 adbd / smsrelay 两个 40x15s、20x15s 长循环是顺序执行的，放它们后面永远跑不到。
+/system/xbin/busybox setsid /system/bin/sh /system/etc/relay-helper/start.sh >/dev/null 2>&1 </dev/null &
+# --- relay-helper autostart END ---

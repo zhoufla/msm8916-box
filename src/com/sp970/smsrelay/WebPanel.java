@@ -226,6 +226,205 @@ public final class WebPanel {
             // scan 自己带 ok / list / hint（热点开着时单射频扫不了，要给出原因）
             return Http.Resp.json(WifiCtl.scan(app).toString());
         }
+
+        // ---- 维护（B0 + B1）：现有 21 个 API 一个都不动 ----
+        if ("/api/health".equals(path)) return Http.Resp.json(Maint.health(app).toString());
+        if (path.startsWith("/api/maint/")) return maint(path, p, post);
+
+        // ---- 移动网络 / 换卡救砖（B2 第 13–19 项）----
+        if ("/api/radio".equals(path)) return Http.Resp.json(Radio.state(app).toString());
+        if (path.startsWith("/api/radio/")) return radio(path, p, post);
+        if ("/api/netdiag".equals(path)) {
+            if (!post) throw new IllegalArgumentException("需要 POST");
+            return Http.Resp.json(NetDiag.run(app, p.optString("kind", "ping"),
+                    p.optString("target", ""), p.optString("iface", ""),
+                    p.optInt("count", 4)).toString());
+        }
+        if ("/api/wifi/adv".equals(path)) {
+            return Http.Resp.json(post
+                    ? WifiCtl.advApply(app, p.optString("action", ""),
+                    p.optString("arg", ""), p.optString("arg2", "")).toString()
+                    : WifiCtl.advInfo(app).toString());
+        }
+        return Http.Resp.error(404, "没有这个接口: " + path);
+    }
+
+    /** /api/radio/* 路由分发。全部特权动作经 Root → 设备侧 helper。 */
+    private Http.Resp radio(String path, JSONObject p, boolean post) throws Exception {
+        if ("/api/radio/apns".equals(path)) {
+            return Http.Resp.json(Radio.apns(app).toString());
+        }
+        if ("/api/radio/apn/save".equals(path)) {
+            if (!post) throw new IllegalArgumentException("需要 POST");
+            return Http.Resp.json(Radio.apnSave(app, p).toString());
+        }
+        if ("/api/radio/apn/delete".equals(path)) {
+            if (!post) throw new IllegalArgumentException("需要 POST");
+            return Http.Resp.json(Radio.apnDelete(app, p.optLong("id", 0)).toString());
+        }
+        if ("/api/radio/apn/prefer".equals(path)) {
+            if (!post) throw new IllegalArgumentException("需要 POST");
+            return Http.Resp.json(Radio.apnPrefer(app, p.optLong("id", 0),
+                    p.optBoolean("reconnect", true)).toString());
+        }
+        if ("/api/radio/mode".equals(path)) {
+            if (!post) throw new IllegalArgumentException("需要 POST");
+            return Http.Resp.json(Radio.setMode(app, p.optInt("mode", -1),
+                    p.optBoolean("reboot", false)).toString());
+        }
+        if ("/api/radio/data".equals(path)) {
+            if (!post) throw new IllegalArgumentException("需要 POST");
+            return Http.Resp.json(Radio.setData(app, p.optBoolean("on", true)).toString());
+        }
+        if ("/api/radio/roaming".equals(path)) {
+            if (!post) throw new IllegalArgumentException("需要 POST");
+            return Http.Resp.json(Radio.setRoaming(app, p.optBoolean("on", false)).toString());
+        }
+        if ("/api/radio/traffic".equals(path)) {
+            return Http.Resp.json(Radio.traffic(app).toString());
+        }
+        if ("/api/radio/traffic/clear".equals(path)) {
+            if (!post) throw new IllegalArgumentException("需要 POST");
+            return Http.Resp.json(Radio.trafficClear(app).toString());
+        }
+        if ("/api/radio/simlock".equals(path)) {
+            if (!post) return Http.Resp.json(Radio.simLock(app).toString());
+            JSONObject root = new JSONObject(AppConfig.effectiveJson(app));
+            JSONObject sl = new JSONObject();
+            sl.put("enabled", p.optBoolean("enabled", false));
+            String action = p.optString("action", "log");
+            if (!"log".equals(action) && !"block".equals(action)) {
+                throw new IllegalArgumentException("action 只能是 log / block");
+            }
+            sl.put("action", action);
+            JSONArray wl = new JSONArray();
+            String raw = p.optString("list", "");
+            String[] parts = raw.split("[,，;；\\s]+");
+            for (int i = 0; i < parts.length; i++) {
+                // 只留数字：这台 ROM 的 ICCID 会带 f 填充位，用户也可能粘贴带空格的分组卡号
+                String s = Radio.normIccid(parts[i].trim());
+                if (s.length() >= 4 && s.length() <= 24) wl.put(s);
+            }
+            sl.put("list", wl);
+            if (sl.optBoolean("enabled") && wl.length() == 0) {
+                throw new IllegalArgumentException("白名单不能为空：开了锁会把所有卡都判成不合规");
+            }
+            root.put("simLock", sl);
+            AppConfig.saveEffective(app, root.toString(2));
+            Logs.add("radio", "SIM 锁 → enabled=" + sl.optBoolean("enabled")
+                    + " action=" + action + " 白名单 " + wl.length() + " 条");
+            JSONObject out = Radio.simLock(app);
+            out.put("message", "已保存：SIM 锁" + (sl.optBoolean("enabled") ? "开启" : "关闭")
+                    + "，" + wl.length() + " 条白名单");
+            return Http.Resp.json(out.toString());
+        }
+        return Http.Resp.error(404, "没有这个接口: " + path);
+    }
+
+    /** /api/maint/* 路由分发。特权动作全部经 Maint → Root → 设备侧 helper。 */
+    private Http.Resp maint(String path, JSONObject p, boolean post) throws Exception {
+        if ("/api/maint/helper".equals(path)) {
+            AppConfig cfg = AppConfig.load(app);
+            JSONObject o = new JSONObject();
+            o.put("ok", true);
+            o.put("alive", Root.alive(app));
+            o.put("uid", Root.uid(app));
+            o.put("url", cfg.helperUrl);
+            o.put("token", cfg.helperToken);
+            return Http.Resp.json(o.toString());
+        }
+        if ("/api/maint/config".equals(path)) {
+            if (!post) {
+                AppConfig cfg = AppConfig.load(app);
+                JSONObject o = new JSONObject();
+                o.put("ok", true);
+                o.put("helperUrl", cfg.helperUrl);
+                o.put("helperToken", cfg.helperToken);
+                o.put("healthEnabled", cfg.maintHealthEnabled);
+                o.put("healthIntervalMin", cfg.maintHealthIntervalMin);
+                return Http.Resp.json(o.toString());
+            }
+            JSONObject root = new JSONObject(AppConfig.effectiveJson(app));
+            String u = p.optString("helperUrl", "").trim();
+            if (!u.startsWith("http://127.0.0.1:")) {
+                throw new IllegalArgumentException("helper 地址只能是 http://127.0.0.1:<port>");
+            }
+            String t = p.optString("helperToken", "").trim();
+            if (t.length() == 0) throw new IllegalArgumentException("token 不能为空");
+            JSONObject hp = new JSONObject();
+            hp.put("url", u);
+            hp.put("token", t);
+            root.put("helper", hp);
+            JSONObject mt = new JSONObject();
+            mt.put("healthEnabled", p.optBoolean("healthEnabled", true));
+            int g = p.optInt("healthIntervalMin", 30);
+            if (g < 1 || g > 1440) throw new IllegalArgumentException("体检间隔要在 1~1440 分钟");
+            mt.put("healthIntervalMin", g);
+            root.put("maint", mt);
+            AppConfig.saveEffective(app, root.toString(2));
+            Logs.add("maint", "helper 配置改为 " + u);
+            JSONObject o = new JSONObject();
+            o.put("ok", true);
+            o.put("message", "已保存");
+            return Http.Resp.json(o.toString());
+        }
+        if ("/api/maint/cmd".equals(path)) {
+            if (!post) throw new IllegalArgumentException("需要 POST");
+            return Http.Resp.json(Maint.cmd(app, p.optString("cmd", "")).toString());
+        }
+        if ("/api/maint/checkup".equals(path)) {
+            return Http.Resp.json(Maint.checkup(app).toString());
+        }
+        if ("/api/maint/logs".equals(path)) {
+            return Http.Resp.json(Maint.logs(app, p.optString("kind", "main"),
+                    p.optString("filter", ""), p.optInt("lines", 200)).toString());
+        }
+        if ("/api/maint/logs/bundle".equals(path)) {
+            if (!post) throw new IllegalArgumentException("需要 POST");
+            return Http.Resp.json(Maint.bundleLogs(app).toString());
+        }
+        if ("/api/maint/backup".equals(path)) {
+            if (!post) throw new IllegalArgumentException("需要 POST");
+            return Http.Resp.json(Maint.backup(app).toString());
+        }
+        if ("/api/maint/restore".equals(path)) {
+            if (!post) throw new IllegalArgumentException("需要 POST");
+            return Http.Resp.json(Maint.restore(app, p.optString("path", ""),
+                    p.optBoolean("includeDb", false), p.optString("confirm", "")).toString());
+        }
+        if ("/api/maint/files".equals(path)) {
+            return Http.Resp.json(Maint.files(app).toString());
+        }
+        if ("/api/maint/file".equals(path)) {
+            String fp = p.optString("path", "");
+            if (!fp.startsWith("/sdcard/Download/") || fp.contains("..")) {
+                throw new IllegalArgumentException("只能下载 /sdcard/Download/ 下的文件");
+            }
+            byte[] b = Root.file(app, fp);
+            Http.Resp r = Http.Resp.bytes("application/octet-stream", b);
+            String name = fp.substring(fp.lastIndexOf('/') + 1).replaceAll("[^A-Za-z0-9._-]", "_");
+            r.headers.put("Content-Disposition", "attachment; filename=\"" + name + "\"");
+            return r;
+        }
+        if ("/api/maint/power".equals(path)) {
+            if (!post) throw new IllegalArgumentException("需要 POST");
+            return Http.Resp.json(Maint.power(app, p.optString("action", ""),
+                    p.optString("confirm", "")).toString());
+        }
+        if ("/api/maint/led".equals(path)) {
+            if (!post) throw new IllegalArgumentException("需要 POST");
+            return Http.Resp.json(Maint.led(app, p.optString("action", "")).toString());
+        }
+        if ("/api/maint/cron".equals(path)) {
+            return Http.Resp.json(post
+                    ? Maint.cronSet(app, p.optString("text", "")).toString()
+                    : Maint.cronGet(app).toString());
+        }
+        if ("/api/maint/reset".equals(path)) {
+            if (!post) throw new IllegalArgumentException("需要 POST");
+            return Http.Resp.json(Maint.factoryReset(app, p.optString("scope", "config"),
+                    p.optString("confirm", "")).toString());
+        }
         return Http.Resp.error(404, "没有这个接口: " + path);
     }
 
@@ -459,7 +658,6 @@ public final class WebPanel {
         c.put("auto", cfg.updateAuto);
         c.put("intervalH", cfg.updateIntervalH);
         c.put("insecure", cfg.updateInsecure);
-        c.put("webkey", cfg.updateWebkey);
         o.put("config", c);
         o.put("downloadDir", new File(Environment.getExternalStorageDirectory(),
                 "Download").getAbsolutePath());
@@ -490,11 +688,6 @@ public final class WebPanel {
         if (ih < 1 || ih > 24 * 30) throw new IllegalArgumentException("检查间隔要在 1~720 小时");
         up.put("intervalH", ih);
         if (p.optBoolean("insecure", false)) up.put("insecure", true);
-        String wk = p.optString("webkey", "");
-        if (wk.length() > 0) {
-            if (wk.indexOf(':') <= 0) throw new IllegalArgumentException("root 通道凭据写成 user:pass");
-            up.put("webkey", wk);
-        }
         root.put("update", up);
         AppConfig.saveEffective(app, root.toString(2));
         Logs.add("update", "配置改为 mode=" + mode + " repo=" + repo + " auto=" + up.optBoolean("auto"));

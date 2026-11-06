@@ -1,0 +1,52 @@
+#!/system/bin/sh
+# relay-helper · 二进制文件下载
+#
+# 请求：POST /cgi-bin/get?t=<token>
+#   body = 设备上的绝对文件路径（只允许 /sdcard/Download/ 下的文件）
+# 响应：文件原始字节（application/octet-stream）
+#
+# 不做 multipart 上传：日志包/备份包由 cmd 通道在设备上生成，
+# 面板只需要把它们下载回来。上传交给 adb push 或升级通道。
+
+BB=/system/xbin/busybox
+ROOT=/system/etc/relay-helper
+
+want=$(cat "$ROOT/token" 2>/dev/null)
+got=${QUERY_STRING#t=}
+if [ -z "$want" ] || [ "$got" != "$want" ] || [ "${REQUEST_METHOD}" != "POST" ]; then
+    echo "Content-type: text/plain; charset=utf-8"
+    echo ""
+    echo "[exit=77] bad token or method"
+    exit 0
+fi
+
+n=${CONTENT_LENGTH:-0}
+case "$n" in
+    ''|*[!0-9]*) n=0 ;;
+esac
+if [ "$n" -le 0 ] || [ "$n" -gt 4096 ]; then
+    echo "Content-type: text/plain; charset=utf-8"
+    echo ""
+    echo "[exit=2] bad CONTENT_LENGTH"
+    exit 0
+fi
+p=$($BB head -c "$n")
+
+case "$p" in
+    /sdcard/Download/*) ;;
+    *) echo "Content-type: text/plain; charset=utf-8"; echo ""; echo "[exit=2] forbidden path"; exit 0 ;;
+esac
+case "$p" in
+    *..*|*'\'*) echo "Content-type: text/plain; charset=utf-8"; echo ""; echo "[exit=2] forbidden path"; exit 0 ;;
+esac
+if [ ! -f "$p" ]; then
+    echo "Content-type: text/plain; charset=utf-8"
+    echo ""
+    echo "[exit=3] file not found"
+    exit 0
+fi
+
+echo "Content-type: application/octet-stream"
+echo ""
+$BB cat "$p"
+exit 0

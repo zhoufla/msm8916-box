@@ -61,10 +61,12 @@
 "web": {"enabled": true, "port": 8080, "user": "admin", "pass": "admin"}
 ```
 
-六个页面：**概览**（队列/设备/信号/最近日志）· **短信**（收信 + 每通道投递状态 + 重发 +
+九个页面：**概览**（队列/设备/信号/最近日志）· **短信**（收信 + 每通道投递状态 + 重发 +
 补收 + 注入测试）· **发送**（发短信 + 发送记录）· **通道**（通道增删改、设备名、面板账号）·
 **系统**（硬件/系统/存储/流量/网卡）· **WiFi**（热点开关与 SSID/密码、station 开关、
-无线网卡与 MAC/IP、客户端、扫频）。
+无线网卡与 MAC/IP、客户端、扫频、隐藏 SSID/关联上限/踢客户端）· **网络**（APN、网络制式、
+数据/漫游开关、SIM 锁、流量统计、网络诊断）· **升级** · **维护**（root 命令框、体检、日志、
+备份、电源、定时任务、LED、文件下载、恢复出厂）。
 
 页面是单文件、无外链 CDN，设备没网也能打开；XHR + ES5，老浏览器也能用。
 
@@ -90,9 +92,23 @@
 | GET | `/api/update` | 当前版本 + 上次检查结果 + 更新源配置 |
 | POST | `/api/update/check` | 查最新版本（结果落缓存，面板直接读） |
 | POST | `/api/update/apply` | 下载 + 校验 + 安装 |
-| POST | `/api/update/config` | 改更新源：`{mode,repo,manifest,auto,intervalH,insecure,webkey}` |
+| POST | `/api/update/config` | 改更新源：`{mode,repo,manifest,auto,intervalH,insecure}` |
 | GET | `/api/update/probe?host=` | TLS 诊断：本机支持的协议/套件 + 实际握手结果 |
 | GET | `/api/logs?limit=80` | 内存日志 |
+| GET | `/api/health` | 轻量健康探针（8080 / SIM / RIL / SSR / modem / 内存） |
+| GET | `/api/maint/helper` | helper 状态、地址、token、执行命令的 uid |
+| GET/POST | `/api/maint/config` | 读写 `helper` / `maint` 配置段 |
+| POST | `/api/maint/cmd` | 通用 root 命令框：`{"cmd":"id"}` |
+| GET | `/api/maint/checkup` | 一键体检（与 `boot-window-check.py` 同一套判据） |
+| GET | `/api/maint/logs` | `?kind=main\|radio\|kernel\|relay\|all&filter=&lines=200` |
+| POST | `/api/maint/logs/bundle` | 打包 logcat/dmesg/props/ps/netstat 到 `/sdcard/Download` |
+| POST | `/api/maint/backup` | 打包 conf + shared_prefs + relay.db + softap.conf + 属性 |
+| POST | `/api/maint/restore` | 从设备上已有备份包恢复（需 `confirm:"RESTORE"`） |
+| GET | `/api/maint/files` | 列出 `/sdcard/Download` |
+| GET | `/api/maint/file?path=` | 二进制下载（走 `Resp.bytes()`，不做 multipart 上传） |
+| POST | `/api/maint/power` | 重启 / 关机 / bootloader（需 `confirm` 大写动作名） |
+| POST | `/api/maint/led` | LED 亮 / 灭 / 闪 8 下 |
+| GET/POST | `/api/maint/cron` | 读写设备侧 crontab，30s 内自动重载 crond |
 
 `/api/wifi` 的 `state` 字段（真机实测值）：
 
@@ -125,6 +141,38 @@ curl -u admin:admin http://192.168.42.129:8080/api/status
 curl -u admin:admin -X POST -d '{"to":"10086","body":"1"}' http://192.168.42.129:8080/api/send
 ```
 
+## 维护通道：relay-helper（替代 webkey 的地基）
+
+按 `sp970-full-replacement-feature-list.html` 的 B0 + B1 实施。**所有特权能力共用一个
+通用 root 命令通道**，而不是逐功能写白名单 CGI：加功能只改前端/app 一层，不用重新部署 /system。
+
+```
+浏览器 :8080  →  WebPanel  →  Root.java  →  127.0.0.1:8899 busybox httpd + CGI  →  uid=0 sh
+                                                  ↑ init(root) 开机拉起 + 30s 看门狗
+```
+
+| 项 | 落地位置 |
+|---|---|
+| 开机自启 root 通道 / 看门狗 | `tools/relay-helper/start.sh` + `post_boot.snippet`；插入点必须在 `setprop service.adb.tcp.port 5555` **之前**（后面两个长循环永远跑不到） |
+| 通用命令 / 二进制下载 | `cgi-bin/cmd`（POST body = 命令，末行 `[exit=N]`，输出上限 256KB / 90s）、`cgi-bin/get`（只允许 `/sdcard/Download/`） |
+| app 侧客户端 | `Root.java`：超时、输出截断、退出码、`uid()`、`alive()`、`file()` |
+| 一键静默升级 | `Update.install()` 改用 `Root.exec()`；`pm install` 与 `am start` 仍拼同一条命令 |
+| 命令框 / 体检 / 日志 / 电源 / 备份 / 文件 / cron / LED | `Maint.java` + `/api/maint/*` + 面板「维护」tab |
+| 健康自检 | `/api/health` + `Maint.tick()` 定时落盘 + crond 每天 04:00 快照 |
+| 定时任务 | `crontab` 由面板编辑，看门狗检测变化后重载 `busybox crond` |
+
+设备侧真机实测踩到的坑（都已写进代码注释）：
+
+- busybox httpd 的 CGI 响应头必须用**纯 `\n`** 结尾；用 `\r\n` 会把正文当 HTTP 头转发。
+- 这台 4.4 的 toolbox 没有 `printf` / `head` / `tail` / `nohup` / `setsid`，一律用
+  `/system/xbin/busybox` 的 applet；后台进程必须三个 fd 全重定向，否则 `adb shell` 不返回。
+- `flock -n 9` 在这台 `/system/bin/sh` 上报 `Bad file descriptor`，单实例改用 pidfile + `/proc`。
+- Android 原厂没有 `/etc/passwd`，`getpwnam("root")` 失败导致 crond 报
+  `ignoring file 'root' (no such user)`；部署脚本会补一条最小记录。
+- `busybox` 与 helper 放 `/system`（`/data` 带 nosuid 且可能被清），不依赖 `/data/local/tmp`。
+- `post_boot.sh` 已纳入仓库版本化（`tools/relay-helper/init.qcom.post_boot.sh`），
+  设备改动丢失时可以重放部署。
+
 ## 在线升级（GitHub Actions 云编译 + 设备主动拉取）
 
 打一个 tag 就出一条 Release，设备在面板「升级」页点一下，或到点自动查（默认 24h）。
@@ -148,12 +196,15 @@ git tag v1.3.0 && git push origin v1.3.0
 装之前三道校验：sha256 → APK 签名必须与已装一致 → versionCode 必须更大。
 所以即使传输层被中间人替了，也装不进去。
 
-安装依次尝试三条路：
+安装依次尝试两条路：
 
-1. `su -c pm install`（Magisk/SuperSU 已授权时静默）
-2. 机器自带 web 后台的 root 通道 `POST http://127.0.0.1/run`（digest，默认 `admin:admin`，
-   可用 `update.webkey` 改）——SP970 实测可用，装完在同一条命令里 `am start` 拉起
-3. 系统安装器 Intent（需手动点确认）；都不行就把 APK 留在 `/sdcard/Download`，`adb install -r` 兜底
+1. **relay-helper root 通道**（见下一节）：`pm install -r -d …; sleep 2; am start …` 拼在
+   同一条命令里，静默安装且自动拉起。helper 是独立的 root 进程，装包杀掉本 app 后它照样
+   能执行完 `am start`，这是它比「app 自己起 su」可靠的原因。
+2. 系统安装器 Intent（需手动点确认）；都不行就把 APK 留在 `/sdcard/Download`，`adb install -r` 兜底。
+
+固件 `/system/xbin/su` 只放行 uid 0/2000，uid 10075 的 smsrelay 永远提不了权，
+旧的 `su` 分支（每次白等 120s）和 webkey `/run` + Digest 分支已整体删除。
 
 **这台机器踩到的两个坑**（代码里已处理）：
 
@@ -182,10 +233,17 @@ sh tools/run-tests.sh  # 离线测试：通道 JSON/钉钉载荷/验证码/退�
 
 ```sh
 adb connect 192.168.42.129:5555
-adb install -r dist/com.sp970.smsrelay-1.1.apk
+python tools/deploy-helper.py                 # 设备侧 root helper（幂等，可重放）
+adb install -r dist/com.sp970.smsrelay-<ver>.apk
 adb shell am start -n com.sp970.smsrelay/.MainActivity   # 必须！解除 stopped state
 adb push config/smsrelay.conf /sdcard/smsrelay.conf
 ```
+
+`deploy-helper.py` 会：把 busybox 复制进 `/system/xbin`、push `tools/relay-helper/` 到
+`/system/etc/relay-helper/`、在 `init.qcom.post_boot.sh` 的**两个长循环之前**幂等插入启动块、
+把最终开机脚本快照写回仓库 `tools/relay-helper/init.qcom.post_boot.sh`、立即拉起并校验。
+加 `--reboot` 会热重启一次验证开机自启；`--verify-only` 只校验不改设备。
+主机上有两个版本的 adb 时统一用 `-L tcp:5039`（与 `diag/adblib.py` 一致），避免互杀 server。
 
 `MainActivity.onCreate` 会顺手 `startService`，所以一句 `am start` 就能把常驻服务和面板带起来
 （早期版本要另外 `am startservice -n com.sp970.smsrelay/.RelayService`）。
@@ -203,7 +261,10 @@ sh tools/smoke-test.sh 192.168.42.129:8080 admin:admin 10086
 ```
 
 脚本会逐项打面板接口（无凭据 401、首页、status/sys/messages/outbox/config/logs/wifi、
-注入测试消息、补收），最后汇总通过/失败项。
+注入测试消息、补收），再打维护通道（uid=0、health、体检、命令框、日志、文件、crontab、
+日志打包、备份、LED），再打移动网络（radio 状态/APN 列表/流量/SIM 锁/attach 诊断/
+ping/wifi 高级/APN 增删演练），共 30 项，最后汇总通过/失败项。重启/关机/制式写入/
+数据开关/首选 APN 切换/恢复出厂不进自检，需人工在面板二次确认。
 
 ## 真机验证记录（SP970-B / 4.4.4 / 2026-11-06）
 
@@ -263,8 +324,22 @@ adb shell am broadcast -a com.sp970.smsrelay.TEST --ez importinbox true
 
 - 网络 adb 持久化：`/system/build.prop`（`rndis,adb` + tcp.port）+ `/system/etc/init.qcom.post_boot.sh`
   里的 adbd 看门狗（40×15s）与 smsrelay 开机兜底拉起（20×15s）
-- root 救援通道：webkey 后台 `POST http://192.168.42.129/run`（Digest admin/admin，uid=0）
+- root 通道：**relay-helper**（本仓库自维护）`busybox httpd` 只听 `127.0.0.1:8899`，
+  CGI `cgi-bin/cmd` 以 root 执行，由 `init.qcom.post_boot.sh` 在长循环之前拉起 + 30s 看门狗。
+  旧的 webkey 后台 `POST /run`（Digest）已不再依赖，可安全删除 webkey。
 - 镜像工具：`tools/patch-system-img.sh`（debugfs 离线删应用/注入 APK）、`tools/remove-vendor.txt`（删除清单）
+
+## 固件缺陷修复（tools/hwfix）
+
+原厂固件带两个缺陷，修复脚本与完整原理说明见 [`tools/hwfix/README.md`](tools/hwfix/README.md)。
+
+| 修复 | 现象 | 根因 | 入口 |
+|---|---|---|---|
+| 四核 | CPU 长期只跑 1 核（`online` 恒为 `0`） | 内核 `per_cpu(idle_threads,1..3)` 为 NULL，`cpu_up()` 返回 `-ENOMEM` | `quadcore/apply.sh`，`persist.sh` 固化 |
+| USB adb | 插电脑枚举不到 ADB 设备 | `init.qcom.usb.rc:618` 的 `rndis,adb` 规则漏写 `adb` 且缺 `start adbd` | `usbadb/enable.sh` |
+
+两者都**不写 boot 分区、不刷机、可一键回滚**，`boot.img` 与出厂备份逐字节一致。
+注意本机 adbd 只服务一条传输：**USB adb 与网络 adb 不能同时使用**，切换方式见该目录 README。
 
 ## 路线图
 
@@ -277,7 +352,37 @@ adb shell am broadcast -a com.sp970.smsrelay.TEST --ez importinbox true
 - [x] 钉钉 markdown 卡片消息、多设备标签（`tag`）、webhook 通道重试策略独立配置（`maxTries`）
 - [ ] 面板访问令牌（免 Basic 弹窗，方便嵌到其他系统）
 - [ ] 短信规则：关键字/号码白名单过滤，验证码单独走低延迟通道
-- [ ] 定时任务：定时重启热点、定时补收、低电量告警
+- [x] **维护通道（B0 + B1）**：开机自启的 root helper + 静默升级 + 命令框 + 电源管理 +
+  日志打包 + 一键体检 + 健康自检 + 备份恢复 + 文件下载 + 定时任务 + LED 定位
+- [x] **B2 换卡救砖**：APN 增删改/首选切换（content provider + `svc data` 重连）、
+  网络制式（写 `preferred_network_mode`，保留原厂后缀，重启生效）、移动数据/漫游、
+  SIM 锁（ICCID 白名单，log/block 两档）、流量统计与清零、网络诊断（attach/ping/traceroute/
+  dns/route/netstat/tcpdump）、恢复出厂（只重置自研配置，绝不删短信库）。
+  WiFi 高级按真机能力收敛为：隐藏 SSID / 最大关联数 / 自动信道 / 踢客户端（hostapd_cli）——
+  改信道、改发射功率、MAC 白名单在这台裁剪 hostapd + QCA 驱动上没有可用原语，明确不做。
+  （待办：冷启动后重跑一次开机窗口验证 `verify 5 --reboot`）
+- [ ] 定时任务：定时重启热点、定时补收、低电量告警（crontab 已可写，缺预设模板）
+
+### B2 落地补充（2026-11-06 深夜真机验证）
+
+- **APN**：读走 `sqlite3 -separator`，写走 `content insert/update/delete`（provider 发变更
+  通知，不用重启 phone）；首选切换是 `content update --uri .../preferapn --bind apn_id:i:<id>`
+  + `svc data disable/enable` 重连。真机演练：新增 ZZ_SMOKE → 删除，首选 1602↔1604 往返。
+- **ICCID 带 f 填充位**：这台 ROM 读出的 ICCID 是 `898600682226f0488598`（BCD 填充），
+  比较和入库前统一只保留数字，否则白名单永远匹配不上。
+- **SIM 锁**：白名单整串或末 4 位都认；`log` 只记录，`block` 停止转发（消息仍入库，
+  换回原卡可补发）。服务循环每轮检查。
+- **helper 开机自启的坑（本次抓到）**：`/data` 跨开机不清理，上次开机的 pidfile 到新开机
+  里 PID 几乎必被复用，只判 `/proc/<pid>` 存在会让 `start.sh` 误判「已有实例」直接退出
+  （实测旧 pid 1374 变成了带 androidboot 参数的内核进程）。已改为核对
+  `/proc/<pid>/cmdline` 是否真的含 `start.sh` / `httpd` / `crond`，修复后重启验证通过。
+- **热重启后 adbd 假死**：面板 `reboot` / 异常重启后，adbd 仍监听 5555 但对新连接不发
+  CNXN 握手（原始 TCP 实测），kill -9 adbd + `start adbd` 也无效，冷启动（断电重上电）
+  才恢复。期间面板 8080 + relay-helper 就是唯一 root 通道；本次 1.5.0 的「无 adb 部署」
+  （APK 分块 base64 经 `/api/maint/cmd` 写入 → sha256 校验 → `pm install -r` + 自动拉起）
+  即在该状态下完成。
+- **APN 演练用的 ZZ_SMOKE** 已删；factoryReset 演练后配置已从备份恢复并写回
+  `/sdcard/smsrelay.conf`（面板保存时若 conf 不存在则只写 prefs，部署/迁移以 conf 为准）。
 
 ## 目录结构
 
@@ -285,9 +390,15 @@ adb shell am broadcast -a com.sp970.smsrelay.TEST --ez importinbox true
 msm8916-box/
 ├── AndroidManifest.xml        # API 19，短信/WiFi/电话状态权限
 ├── build.sh                   # aapt→javac→d8→zipalign→apksigner 六步流水线
-├── src/com/sp970/smsrelay/    # 21 个类，无第三方依赖，无 res/
-├── assets/web/index.html      # 面板单页（aapt -A assets 打包）
+├── src/com/sp970/smsrelay/    # 23 个类（新增 Root.java / Maint.java），无第三方依赖，无 res/
+├── assets/web/index.html      # 面板单页（8 个 tab，aapt -A assets 打包）
 ├── test/                      # 离线测试源码（纯 JVM，tools/run-tests.sh 驱动）
 ├── config/smsrelay.conf.example
-└── tools/                     # run-tests.sh 离线测试、smoke-test.sh 装完自检、patch-*.sh 镜像定制
+└── tools/
+    ├── deploy-helper.py       # 设备侧 helper 一键部署 / 校验（可重放）
+    ├── relay-helper/          # 设备侧文件（CGI、开机脚本、crontab），全部版本化
+    ├── smoke-test.sh          # 装完自检 30 项
+    ├── run-tests.sh           # 离线测试
+    ├── hwfix/                 # 固件缺陷修复（四核热补丁 / USB adb），见 tools/hwfix/README.md
+    └── patch-system-img.sh    # 离线定制 system.img（debugfs）
 ```
