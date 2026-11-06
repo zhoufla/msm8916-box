@@ -95,4 +95,20 @@ public final class Ver {
         if (t.length() > limit) t = t.substring(0, limit) + "…";
         return t;
     }
+
+    /**
+     * 把清单里的 apk 引用变成完整地址：绝对地址原样返回，
+     * 裸文件名 / ./x / /x 都接到 base 所在目录上。
+     * （build.sh 产出的 latest.json 里就是裸文件名。）
+     */
+    public static String abs(String base, String ref) {
+        if (base == null || ref == null) return ref == null ? "" : ref;
+        if (ref.startsWith("http://") || ref.startsWith("https://")) return ref;
+        String dir = base;
+        int cut = dir.lastIndexOf('/');
+        if (cut > 0) dir = dir.substring(0, cut + 1);
+        while (ref.startsWith("./")) ref = ref.substring(2);
+        while (ref.startsWith("/")) ref = ref.substring(1);
+        return dir + ref;
+    }
 }

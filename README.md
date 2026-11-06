@@ -142,8 +142,8 @@ git tag v1.3.0 && git push origin v1.3.0
 
 | mode | 取法 | 备注 |
 |---|---|---|
-| `github` | `api.github.com/repos/<owner>/<repo>/releases/latest`；APK 走 `/releases/assets/<id>` | 不用 `browser_download_url`——那指向 github.com，这台机器连不上 |
-| `manifest` | 任意 JSON：`{"version","url","sha256","size","notes"}` | 自建镜像 / 内网 / 其他 CDN |
+| `github` | 先走 `api.github.com/repos/<owner>/<repo>/releases/latest`；APK 优先用 `browser_download_url`（github.com 直链，不占 API 配额），失败再退回 `/releases/assets/<id>` | 未认证的 API 是同一出口 IP **每小时 60 次**，用完就 403；限流或 api.github.com 不通时，自动改读 `https://github.com/<owner>/<repo>/releases/latest/download/latest.json`，再从直链下 |
+| `manifest` | 任意 JSON：`{"version","url","sha256","size","notes"}` | `url` 也可以写裸文件名，按清单所在目录补全（`build.sh` 产出的 latest.json 里就是裸文件名 `apk`）；适合自建镜像 / 内网 / 其他 CDN |
 
 装之前三道校验：sha256 → APK 签名必须与已装一致 → versionCode 必须更大。
 所以即使传输层被中间人替了，也装不进去。

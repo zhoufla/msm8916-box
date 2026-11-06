@@ -54,6 +54,18 @@ public class LogicTest {
                 Ver.sha256("abc".getBytes()));
         eq("体积 KB", "2.0 KB", Ver.size(2048));
         eq("brief 截断", true, Ver.brief("一二三四五", 3).endsWith("…"));
+
+        // 清单里的 apk 引用：绝对地址原样，裸文件名接到清单所在目录
+        String base = "https://github.com/o/r/releases/latest/download/latest.json";
+        eq("绝对地址不变", "http://x/a.apk", Ver.abs(base, "http://x/a.apk"));
+        eq("裸文件名", "https://github.com/o/r/releases/latest/download/a.apk",
+                Ver.abs(base, "a.apk"));
+        eq("./ 前缀", "https://github.com/o/r/releases/latest/download/a.apk",
+                Ver.abs(base, "./a.apk"));
+        eq("根路径", "https://github.com/o/r/releases/latest/download/a.apk",
+                Ver.abs(base, "/a.apk"));
+        eq("manifest 目录", "http://192.168.1.2:9099/a.apk",
+                Ver.abs("http://192.168.1.2:9099/latest.json", "a.apk"));
     }
 
     // ---------- Channel ----------
