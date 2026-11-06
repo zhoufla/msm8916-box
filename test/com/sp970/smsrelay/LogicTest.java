@@ -28,10 +28,32 @@ public class LogicTest {
         testWebhook();
         testExtractCode();
         testBackoff();
+        testVer();
 
         System.out.println();
         System.out.println("通过 " + pass + " 项，失败 " + fail + " 项");
         if (fail > 0) System.exit(1);
+    }
+
+    // ---------- 版本比较 ----------
+
+    static void testVer() {
+        eq("norm 去 v", "1.2.3", Ver.norm("v1.2.3"));
+        eq("norm 去前缀", "1.2.3", Ver.norm("release-1.2.3"));
+        eq("norm 去后缀", "1.2.3", Ver.norm("1.2.3-beta1"));
+        eq("norm 空", "", Ver.norm(null));
+
+        eq("1.2 < 1.10", -1, Ver.cmp("1.2", "1.10"));
+        eq("相等", 0, Ver.cmp("1.2.0", "1.2"));
+        eq("1.2.1 > 1.2.0", 1, Ver.cmp("1.2.1", "1.2.0"));
+        eq("新版本判定", true, Ver.newer("1.3", "1.2.9"));
+        eq("同版本不算新", false, Ver.newer("1.1", "1.1.0"));
+        eq("旧版本不算新", false, Ver.newer("v1.0.9", "1.1"));
+
+        eq("sha256 已知值", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+                Ver.sha256("abc".getBytes()));
+        eq("体积 KB", "2.0 KB", Ver.size(2048));
+        eq("brief 截断", true, Ver.brief("一二三四五", 3).endsWith("…"));
     }
 
     // ---------- Channel ----------

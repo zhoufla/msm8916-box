@@ -1,6 +1,7 @@
 #!/bin/sh
 # 构建 SP970 短信转发 APK（不依赖 Gradle）
 # 依赖：JDK 17、Android SDK（platforms/android-19 + build-tools/34.0.0）
+# 版本号：默认取 AndroidManifest.xml；CI 打 tag 时用 VER=1.2.0 VC=42 覆盖
 set -e
 
 SDK="${ANDROID_SDK:-$HOME/android-sdk}"
@@ -14,13 +15,19 @@ for f in "$PLATFORM" "$BT/aapt" "$BT/d8" "$BT/zipalign" "$BT/apksigner"; do
 done
 
 APP=com.sp970.smsrelay
-VER=1.1
+DEF_VER=$(grep -o 'versionName="[^"]*"' AndroidManifest.xml | head -1 | cut -d'"' -f2)
+DEF_VC=$(grep -o 'versionCode="[^"]*"' AndroidManifest.xml | head -1 | cut -d'"' -f2)
+VER="${VER:-$DEF_VER}"
+VC="${VC:-$DEF_VC}"
 OUT=dist
 rm -rf build "$OUT"
 mkdir -p build/classes build/dex "$OUT"
 
-echo "== 1/6 生成未签名骨架（manifest + assets 网页）"
-aapt package -f -M AndroidManifest.xml -A assets -I "$PLATFORM" -F build/base.apk \
+echo "== 1/6 生成未签名骨架（manifest + assets 网页） versionName=$VER versionCode=$VC"
+sed -e "s/android:versionCode=\"[0-9]*\"/android:versionCode=\"$VC\"/" \
+    -e "s/android:versionName=\"[^\"]*\"/android:versionName=\"$VER\"/" \
+    AndroidManifest.xml > build/AndroidManifest.xml
+aapt package -f -M build/AndroidManifest.xml -A assets -I "$PLATFORM" -F build/base.apk \
     --min-sdk-version 19 --target-sdk-version 19
 
 echo "== 2/6 编译 Java"
@@ -62,4 +69,18 @@ apksigner sign --ks debug.keystore --ks-pass pass:sp970sp970 \
 
 apksigner verify --print-certs "$OUT/$APP-$VER.apk" | head -5
 ls -lh "$OUT/$APP-$VER.apk"
+
+# 升级用的元数据：CI 会把它当 release 资产挂上去，设备只比 version + sha256
+SIZE=$(wc -c < "$OUT/$APP-$VER.apk" | tr -d ' ')
+SHA=$(sha256sum "$OUT/$APP-$VER.apk" | cut -d' ' -f1)
+cat > "$OUT/latest.json" <<EOF
+{
+  "version": "$VER",
+  "code": $VC,
+  "apk": "$APP-$VER.apk",
+  "size": $SIZE,
+  "sha256": "$SHA"
+}
+EOF
+echo "版本 $VER (versionCode $VC) sha256=${SHA%????????????????????????????????????????????????}"
 echo "完成"

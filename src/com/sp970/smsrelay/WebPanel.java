@@ -202,6 +202,23 @@ public final class WebPanel {
             if (!post) throw new IllegalArgumentException("需要 POST");
             return Http.Resp.json(send(p));
         }
+        if ("/api/update".equals(path)) return Http.Resp.json(updateState());
+        if ("/api/update/check".equals(path)) {
+            if (!post) throw new IllegalArgumentException("需要 POST");
+            return Http.Resp.json(Update.check(app, AppConfig.load(app)).toString());
+        }
+        if ("/api/update/apply".equals(path)) {
+            if (!post) throw new IllegalArgumentException("需要 POST");
+            return Http.Resp.json(Update.apply(app, AppConfig.load(app)).toString());
+        }
+        if ("/api/update/probe".equals(path)) {
+            String h = p.optString("host", "api.github.com");
+            return Http.Resp.json(Net.probe(h));
+        }
+        if ("/api/update/config".equals(path)) {
+            if (!post) throw new IllegalArgumentException("需要 POST");
+            return Http.Resp.json(updateConfig(p));
+        }
         if ("/api/wifi".equals(path)) {
             return post ? Http.Resp.json(wifiApply(p)) : Http.Resp.json(wifiState());
         }
@@ -429,6 +446,65 @@ public final class WebPanel {
         o.put("ok", gone);
         o.put("deleted", gone ? 1 : 0);
         o.put("message", gone ? "已删除 #" + id : "没有这条记录（可能已被清理）");
+        return o.toString();
+    }
+
+    private String updateState() throws Exception {
+        AppConfig cfg = AppConfig.load(app);
+        JSONObject o = Update.state(app);
+        JSONObject c = new JSONObject();
+        c.put("mode", cfg.updateMode);
+        c.put("repo", cfg.updateRepo);
+        c.put("manifest", cfg.updateManifest);
+        c.put("auto", cfg.updateAuto);
+        c.put("intervalH", cfg.updateIntervalH);
+        c.put("insecure", cfg.updateInsecure);
+        c.put("webkey", cfg.updateWebkey);
+        o.put("config", c);
+        o.put("downloadDir", new File(Environment.getExternalStorageDirectory(),
+                "Download").getAbsolutePath());
+        return o.toString();
+    }
+
+    /** 只改 update 段，其余配置原样保留（面板其它页正在改的东西不会被踩掉）。 */
+    private String updateConfig(JSONObject p) throws Exception {
+        JSONObject root = new JSONObject(AppConfig.effectiveJson(app));
+        JSONObject up = new JSONObject();
+        String mode = p.optString("mode", "github");
+        if (!"off".equals(mode) && !"github".equals(mode) && !"manifest".equals(mode)) {
+            throw new IllegalArgumentException("mode 只能是 off / github / manifest");
+        }
+        up.put("mode", mode);
+        String repo = p.optString("repo", "").trim();
+        if (repo.length() > 0) {
+            if (repo.indexOf('/') <= 0) throw new IllegalArgumentException("仓库要写成 owner/repo");
+            up.put("repo", repo);
+        }
+        String man = p.optString("manifest", "").trim();
+        if (man.length() > 0) {
+            if (!man.startsWith("http")) throw new IllegalArgumentException("manifest 要以 http 开头");
+            up.put("manifest", man);
+        }
+        up.put("auto", p.optBoolean("auto", true));
+        int ih = p.optInt("intervalH", 24);
+        if (ih < 1 || ih > 24 * 30) throw new IllegalArgumentException("检查间隔要在 1~720 小时");
+        up.put("intervalH", ih);
+        if (p.optBoolean("insecure", false)) up.put("insecure", true);
+        String wk = p.optString("webkey", "");
+        if (wk.length() > 0) {
+            if (wk.indexOf(':') <= 0) throw new IllegalArgumentException("root 通道凭据写成 user:pass");
+            up.put("webkey", wk);
+        }
+        root.put("update", up);
+        AppConfig.saveEffective(app, root.toString(2));
+        Logs.add("update", "配置改为 mode=" + mode + " repo=" + repo + " auto=" + up.optBoolean("auto"));
+        return updateStateWithOk();
+    }
+
+    private String updateStateWithOk() throws Exception {
+        JSONObject o = new JSONObject(updateState());
+        o.put("ok", true);
+        o.put("message", "已保存");
         return o.toString();
     }
 

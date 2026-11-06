@@ -129,6 +129,7 @@ public class RelayService extends Service {
                     }
                 }
                 if (sent > 0) db.prune();
+                Update.tick(this);          // 到点才真的去查，内部自己起线程
             } catch (Throwable t) {
                 android.util.Log.e("SmsRelay", "loop", t);
             }
