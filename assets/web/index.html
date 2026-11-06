@@ -300,7 +300,7 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
     <select id="mType" onchange="syncFormatUI()"><option value="dingtalk">钉钉机器人</option><option value="webhook">通用 Webhook</option></select>
   </label>
   <label class="fld"><span>URL</span><input id="mUrl" placeholder="https://oapi.dingtalk.com/robot/send?access_token=..."></label>
-  <label class="fld"><span>消息前缀（钉钉关键词校验用）</span><input id="mPrefix" placeholder="设备：158\n来自："></label>
+  <label class="fld"><span>转发模板（默认三行：号码 / 内容 / 设备名；{peer} {body} {device} {tag} {time}）</span><textarea id="mTpl" rows="3" placeholder="{peer}&#10;{body}&#10;设备：{device}"></textarea></label>
   <label class="fld"><span>设备标签（多台设备共用一个机器人时用来区分，可空）</span><input id="mTag" placeholder="客厅-158"></label>
   <div class="grid g2">
     <label class="fld"><span>钉钉消息格式</span>
@@ -320,6 +320,7 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
 
 <script>
 var state = {status:null, sys:null, cfg:null, cfgRaw:'', view:'overview', editIdx:-1, busy:false};
+var DEF_TPL = '{peer}\n{body}\n设备：{device}';
 
 function $(id){ return document.getElementById(id); }
 function esc(s){
@@ -538,6 +539,7 @@ function renderChannels(){
   for(var i=0;i<cs.length;i++){
     var c=cs[i], extra='';
     if(c.tag) extra+='<span class="chip acc" style="margin-left:4px">'+esc(c.tag)+'</span>';
+    if(c.template&&c.template!==DEF_TPL) extra+='<span class="chip" style="margin-left:4px">自定义模板</span>';
     if(c.type==='dingtalk'&&c.format==='markdown') extra+='<span class="chip" style="margin-left:4px">卡片</span>';
     if(c.maxTries&&c.maxTries!==10) extra+='<span class="chip wait" style="margin-left:4px">重试 '+c.maxTries+' 次</span>';
     h+='<div class="chitem"><div class="sw '+(c.enabled?'on':'')+'" onclick="toggleCh('+i+')"><i></i></div>'+
@@ -562,7 +564,7 @@ function toggleWeb(){
 }
 function addChannel(type){
   state.cfg.channels.push({name:type==='dingtalk'?'新钉钉通道':'新Webhook',type:type,url:'',
-    prefix:'【短信】',secret:'',token:'',enabled:true});
+    template:DEF_TPL,secret:'',token:'',enabled:true});
   renderChannels();
   editCh(state.cfg.channels.length-1);
 }
@@ -575,7 +577,7 @@ function editCh(i){
   var c=state.cfg.channels[i];
   $('mTitle').textContent='编辑通道 · '+(c.name||('#'+(i+1)));
   $('mName').value=c.name||''; $('mType').value=c.type||'webhook';
-  $('mUrl').value=c.url||''; $('mPrefix').value=c.prefix||'';
+  $('mUrl').value=c.url||''; $('mTpl').value=c.template||DEF_TPL;
   $('mTag').value=c.tag||'';
   $('mFormat').value=(c.format==='markdown'?'markdown':'text');
   $('mCardTitle').value=c.title||'';
@@ -595,7 +597,9 @@ function applyChannel(){
   var i=state.editIdx; if(i<0) return;
   var c=state.cfg.channels[i];
   c.name=$('mName').value.trim(); c.type=$('mType').value;
-  c.url=$('mUrl').value.trim(); c.prefix=$('mPrefix').value;
+  c.url=$('mUrl').value.trim(); 
+  var tpl=$('mTpl').value;
+  if(tpl.trim()) c.template=tpl; else delete c.template;
   c.secret=$('mSecret').value; c.token=$('mToken').value;
   var tag=$('mTag').value.trim();
   if(tag) c.tag=tag; else delete c.tag;

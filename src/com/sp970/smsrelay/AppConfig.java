@@ -167,7 +167,7 @@ public final class AppConfig {
         c.url = url;
         c.secret = sp.getString("secret", "");
         c.token = sp.getString("token", "");
-        c.prefix = sp.getString("prefix", "【短信】");
+        // 旧版的 prefix 不再使用：正文改由通道模板生成（默认三行：号码 / 内容 / 设备名）
         channels.add(c);
         saveJson(ctx, toJsonString(device, channels, this));
     }
@@ -240,7 +240,7 @@ public final class AppConfig {
                 "      \"type\": \"dingtalk\",\n" +
                 "      \"url\": \"https://oapi.dingtalk.com/robot/send?access_token=请替换\",\n" +
                 "      \"secret\": \"SEC请替换\",\n" +
-                "      \"prefix\": \"【短信】\",\n" +
+                "      \"template\": \"{peer}\\n{body}\\n设备：{device}\",\n" +
                 "      \"enabled\": false\n" +
                 "    },\n" +
                 "    {\n" +

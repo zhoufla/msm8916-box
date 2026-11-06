@@ -45,10 +45,10 @@
 | `url` | 必须 http(s) 开头；为空则该通道不投递 |
 | `secret` | 钉钉加签（SEC 开头），配了才带 timestamp/sign |
 | `token` | webhook 的 `X-Token` 请求头 |
-| `prefix` | 正文前缀，钉钉「自定义关键词」安全设置靠它过校验 |
+| `template` | 正文字模板，默认 `{peer}\n{body}\n设备：{device}`（第一行发件人、第二行内容、第三行设备名）。占位符：`{peer}` `{body}` `{device}` `{tag}` `{time}` |
 | `format` | 钉钉专用：`text`（默认）/ `markdown` 卡片 |
 | `title` | markdown 卡片标题，空则自动「短信 · 设备 · 号码」 |
-| `tag` | 多设备标签：写进钉钉前缀与 webhook 载荷，多台棒子共用一个机器人时区分来源 |
+| `tag` | 多设备标签：写进钉钉卡片标题与 webhook 载荷；要在正文里出现就用 `{tag}` 占位符 |
 | `maxTries` | 该通道失败重试上限（1~50，默认 10） |
 | `enabled` | 是否启用 |
 

@@ -24,6 +24,7 @@ public class LogicTest {
         testMaxTriesClamp();
         testDingTalkText();
         testDingTalkMarkdown();
+        testTemplate();
         testWebhook();
         testExtractCode();
         testBackoff();
@@ -94,20 +95,18 @@ public class LogicTest {
         Channel c = new Channel();
         c.name = "ch";
         c.type = "dingtalk";
-        c.prefix = "【短信】";
         String body = capture(c, "10086", "余额不足");
 
         JSONObject o = new JSONObject(body);
         eq("text msgtype", "text", o.getString("msgtype"));
         String content = o.getJSONObject("text").getString("content");
-        eq("text 内容格式", "【短信】[10086]\n余额不足", content);
+        eq("默认模板三行", "10086\n余额不足\n设备：158", content);
     }
 
     static void testDingTalkMarkdown() throws Exception {
         Channel c = new Channel();
         c.name = "ch";
         c.type = "dingtalk";
-        c.prefix = "【短信】";
         c.format = "markdown";
         String body = capture(c, "10086", "验证码 1234");
         JSONObject o = new JSONObject(body);
@@ -115,16 +114,35 @@ public class LogicTest {
         JSONObject md = o.getJSONObject("markdown");
         eq("markdown 自动标题", "短信 · 158 · 10086", md.getString("title"));
         String text = md.getString("text");
-        eq("markdown 正文含关键词前缀", true, text.startsWith("【短信】[10086]"));
-        eq("markdown 正文含原文", true, text.indexOf("验证码 1234") > 0);
-        eq("markdown 带时间脚注", true, text.indexOf("\n\n> ") > 0);
+        eq("markdown 正文同样是三行", "10086\n验证码 1234\n设备：158", text);
+        eq("markdown 不再加时间脚注", -1, text.indexOf("> "));
 
         c.title = "告警";
         c.tag = "客厅";
         JSONObject o2 = new JSONObject(capture(c, "10086", "x"));
         eq("自定义标题带标签", "[客厅] 告警", o2.getJSONObject("markdown").getString("title"));
-        eq("tag 进正文", true,
-                o2.getJSONObject("markdown").getString("text").startsWith("[客厅] 【短信】"));
+        eq("标签不再混进正文", "10086\nx\n设备：158",
+                o2.getJSONObject("markdown").getString("text"));
+    }
+
+    // ---------- 转发模板 ----------
+
+    static void testTemplate() throws Exception {
+        eq("空模板退回默认三行", "10086\n正文\n设备：158",
+                Tpl.render("", "10086", "正文", "158", "", ""));
+        eq("自定义模板可用占位符", "158|10086|正文",
+                Tpl.render("{device}|{peer}|{body}", "10086", "正文", "158", "", ""));
+        eq("tag 占位符", "[客厅]10086", Tpl.render("[{tag}]{peer}", "10086", "x", "158", "客厅", ""));
+        eq("time 占位符", "10-01 12:00:00 正文",
+                Tpl.render("{time} {body}", "1", "正文", "158", "", "10-01 12:00:00"));
+        eq("压掉多余空行与行尾空格", "a\n\nb", Tpl.tidy("a  \n\n\n\nb  \n\n"));
+        eq("去掉首尾空行（保留行首缩进）", " 正文", Tpl.tidy("\n\n 正文 \n\n"));
+
+        Channel c = new Channel();
+        c.type = "dingtalk";
+        c.template = "{peer}: {body}";
+        JSONObject o = new JSONObject(capture(c, "10086", "hi"));
+        eq("通道模板生效", "10086: hi", o.getJSONObject("text").getString("content"));
     }
 
     static void testWebhook() throws Exception {

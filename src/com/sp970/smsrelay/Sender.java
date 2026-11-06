@@ -24,18 +24,19 @@ public final class Sender {
 
             if (ch.isDingTalk()) {
                 String tagPart = ch.nzTag().length() > 0 ? "[" + ch.nzTag() + "] " : "";
-                String content = tagPart + nz(ch.prefix) + "[" + nz(d.peer) + "]\n" + nz(d.body);
+                // 正文按通道模板渲染，默认就是三行：发件人 / 内容 / 设备名
+                String content = Tpl.render(ch.nzTemplate(), d.peer, d.body, device,
+                        ch.nzTag(), isoTime(d.ts));
                 JSONObject o = new JSONObject();
                 if (ch.isMarkdown()) {
-                    // 卡片消息：标题优先用通道配置，缺省用「设备 + 号码」；
-                    // 关键词校验模式下 prefix 落在正文里，仍然能过机器人校验。
+                    // 卡片消息：标题优先用通道配置，缺省用「设备 + 号码」
                     String titleText = nz(ch.title).trim();
                     if (titleText.length() == 0) {
                         titleText = "短信 · " + nz(device) + " · " + nz(d.peer);
                     }
                     JSONObject md = new JSONObject();
                     md.put("title", tagPart + titleText);
-                    md.put("text", content + "\n\n> " + isoTime(d.ts));
+                    md.put("text", content);
                     o.put("msgtype", "markdown");
                     o.put("markdown", md);
                 } else {
