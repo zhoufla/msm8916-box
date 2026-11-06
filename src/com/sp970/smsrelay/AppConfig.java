@@ -105,7 +105,9 @@ public final class AppConfig {
             w.write("# 由面板写入，改完重启服务生效\n");
             w.write(json);
             w.write("\n");
-        } catch (Throwable ignored) {
+        } catch (Throwable t) {
+            // 文件优先级高于 prefs，写失败 = 下次读回旧值（面板上像「改了又弹回去」），必须留痕
+            Logs.add("config", "conf 文件写入失败: " + t);
         } finally {
             try { if (w != null) w.close(); } catch (Throwable ignored) {}
         }

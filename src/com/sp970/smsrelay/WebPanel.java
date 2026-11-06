@@ -388,17 +388,18 @@ public final class WebPanel {
             JSONObject o = CpuFreq.apply(app, min, max, auto);
             if (o.optBoolean("ok")) {
                 JSONObject root = new JSONObject(AppConfig.effectiveJson(app));
-                JSONObject mt = root.optJSONObject("maint");
-                if (mt == null) {
-                    mt = new JSONObject();
-                    root.put("maint", mt);
-                }
-                mt.put("cpuLimitEnabled", auto);
-                mt.put("cpuMaxKhz", max);
-                mt.put("cpuMinKhz", min);
+            JSONObject mt = root.optJSONObject("maint");
+            if (mt == null) {
+                mt = new JSONObject();
                 root.put("maint", mt);
-                AppConfig.saveEffective(app, root.toString(2));
-                o.put("saved", true);
+            }
+            mt.put("cpuLimitEnabled", auto);
+            mt.put("cpuMaxKhz", max);
+            mt.put("cpuMinKhz", min);
+            root.put("maint", mt);
+            AppConfig.saveEffective(app, root.toString(2));
+            Logs.add("maint", "CPU 限频配置保存 enabled=" + auto + " max=" + max + " min=" + min);
+            o.put("saved", true);
             }
             return Http.Resp.json(o.toString());
         }
@@ -585,6 +586,14 @@ public final class WebPanel {
             }
         }
 
+        // maint / simLock 段有各自的专管接口（维护页 helper 配置、CPU 限频、SIM 锁），
+        // 这里的 body 来自前端内存里的整份配置——页面开着的时候如果用户在别处改过
+        // 这些设置，旧页面一保存就会把它们抹回旧值（CPU 维持开关被改回「仅一次」
+        // 就是这么发生的）。强制用当前生效值回填，这两个段不认前端带来的。
+        JSONObject effective = new JSONObject(AppConfig.effectiveJson(app));
+        if (effective.has("maint")) root.put("maint", effective.getJSONObject("maint"));
+        if (effective.has("simLock")) root.put("simLock", effective.getJSONObject("simLock"));
+
         for (int i = 0; i < arr.length(); i++) {
             JSONObject c = arr.optJSONObject(i);
             if (c == null) throw new IllegalArgumentException("channels[" + i + "] 不是对象");
@@ -609,7 +618,9 @@ public final class WebPanel {
         }
 
         AppConfig old = AppConfig.load(app);
-        AppConfig.saveEffective(app, body);
+        // ⚠ 必须存处理后的 root（端口校验、maint/simLock 回填都在 root 上），
+        // 存原始 body 的话这些保护全部白做
+        AppConfig.saveEffective(app, root.toString(2));
         AppConfig now = AppConfig.load(app);
         RelayService.wake(app);
 
