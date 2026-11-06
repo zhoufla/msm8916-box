@@ -474,7 +474,7 @@ public final class WebPanel {
         q.put("lastError", db.lastError());
         o.put("queue", q);
 
-        o.put("battery", new JSONObject().put("percent", SysInfo.batteryPercent(app)));
+        // USB 直供无电池，不再上报电量
         o.put("signal", new JSONObject().put("level", SysInfo.signalLevel()));
         o.put("webEnabled", cfg.webEnabled);
         return o;

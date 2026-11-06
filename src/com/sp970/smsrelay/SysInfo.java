@@ -18,6 +18,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.FileReader;
 import java.lang.reflect.Method;
 import java.net.Inet4Address;
 import java.net.InetAddress;
@@ -220,7 +221,7 @@ public final class SysInfo {
             o.put("uptimeMs", upMs);
             o.put("uptime", uptimeText(upMs));
 
-            o.put("battery", battery(ctx));
+            // 这台是 USB 直供、没有电池，电量/充电状态没有意义，不再采集
             o.put("signal", signal(ctx));
             o.put("operator", operator);
             o.put("service", serviceState);
@@ -231,6 +232,9 @@ public final class SysInfo {
             o.put("storage", storage());
             o.put("traffic", traffic());
             o.put("memory", memory());
+            o.put("cpu", cpu());
+            o.put("temps", temps());
+            o.put("mem", meminfo());
             o.put("nets", nets());
         } catch (Throwable t) {
             Logs.add("sys", "snapshot 失败: " + t);
@@ -238,31 +242,138 @@ public final class SysInfo {
         return o;
     }
 
-    private static JSONObject battery(Context ctx) {
-        JSONObject b = new JSONObject();
+    /** 读小文本文件第一行；不存在/读不了返回 null。 */
+    private static String readFirstLine(String path) {
         try {
-            Intent i = ctx.registerReceiver(null,
-                    new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
-            if (i == null) return b;
-            int level = i.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
-            int scale = i.getIntExtra(BatteryManager.EXTRA_SCALE, 100);
-            int status = i.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
-            int plugged = i.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1);
-            int volt = i.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0);
-            int temp = i.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0);
-            b.put("percent", scale > 0 ? level * 100 / scale : -1);
-            b.put("voltage", volt);
-            b.put("temp", temp / 10.0);
-            b.put("status", status == BatteryManager.BATTERY_STATUS_CHARGING ? "充电中"
-                    : status == BatteryManager.BATTERY_STATUS_FULL ? "已充满"
-                    : status == BatteryManager.BATTERY_STATUS_DISCHARGING ? "放电中"
-                    : status == BatteryManager.BATTERY_STATUS_NOT_CHARGING ? "未充电" : "未知");
-            b.put("plugged", plugged == BatteryManager.BATTERY_PLUGGED_AC ? "AC"
-                    : plugged == BatteryManager.BATTERY_PLUGGED_USB ? "USB" : "电池");
+            java.io.BufferedReader r = new java.io.BufferedReader(new FileReader(path));
+            String line = r.readLine();
+            r.close();
+            return line == null ? null : line.trim();
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * CPU 负载：/proc/loadavg + 在线核数/当前频率（/sys/devices/system/cpu）。
+     * 注意这台的核是 mpdecision 按负载热插拔的，coresOnline 是瞬时值不是固定值。
+     */
+    private static JSONObject cpu() {
+        JSONObject o = new JSONObject();
+        try {
+            String la = readFirstLine("/proc/loadavg");
+            if (la != null) {
+                String[] f = la.trim().split("\\s+");
+                if (f.length >= 3) {
+                    o.put("load1", f[0]);
+                    o.put("load5", f[1]);
+                    o.put("load15", f[2]);
+                }
+                if (f.length >= 4 && f[3].contains("/")) o.put("procs", f[3]);
+            }
+            int online = 0, total = 0;
+            long freqKhz = -1;
+            for (int i = 0; i < 8; i++) {
+                if (!new File("/sys/devices/system/cpu/cpu" + i).exists()) break;
+                total++;
+                String on = readFirstLine("/sys/devices/system/cpu/cpu" + i + "/online");
+                if (on == null || "1".equals(on)) online++;   // cpu0 通常没有 online 节点，视为常在
+                if (freqKhz < 0) {
+                    String f = readFirstLine(
+                            "/sys/devices/system/cpu/cpu" + i + "/cpufreq/scaling_cur_freq");
+                    try { freqKhz = f == null ? -1 : Long.parseLong(f); } catch (Throwable ignored) {}
+                }
+            }
+            o.put("coresTotal", total);
+            o.put("coresOnline", online);
+            if (freqKhz > 0) o.put("freqKhz", freqKhz);
         } catch (Throwable ignored) {
         }
-        return b;
+        return o;
     }
+
+    /**
+     * 温度：/sys/class/thermal/thermal_zone*。
+     * msm8916 温区 type 归类：tsens 开头 → cpu（多个分区取最高），modem 或 pa → modem，
+     * pm8916 开头 → pmic，其余按原 type 名保留。
+     * 单位坑（本机实测）：tsens 报摄氏度（42=42℃），pm8916/bms 报毫摄氏度（34001=34.0℃），
+     * 按量级区分（<1000 当摄氏度，>=1000 当毫摄氏度）。
+     * 没有电池的机器 bms/battery 温区是电量计残留，直接跳过；读数 <=0 或 >=110 视为无效。
+     */
+    private static JSONObject temps() {
+        JSONObject o = new JSONObject();
+        try {
+            File[] zs = new File("/sys/class/thermal").listFiles();
+            if (zs == null) return o;
+            java.util.Arrays.sort(zs);
+            for (int i = 0; i < zs.length; i++) {
+                if (!zs[i].getName().startsWith("thermal_zone")) continue;
+                String type = readFirstLine(zs[i] + "/type");
+                String temp = readFirstLine(zs[i] + "/temp");
+                if (type == null || temp == null || type.length() == 0) continue;
+                String tl = type.toLowerCase();
+                // 无电池：bms/battery 温区（电量计）没有参考意义
+                if (tl.equals("bms") || tl.startsWith("battery") || tl.startsWith("bat_")) continue;
+                long raw;
+                try { raw = Long.parseLong(temp.trim()); } catch (Throwable t) { continue; }
+                double v = raw >= 1000 ? raw / 1000.0 : (double) raw;
+                if (v <= 0 || v >= 110) continue;
+                v = Math.round(v * 10) / 10.0;
+                String key;
+                if (tl.startsWith("tsens")) key = "cpu";
+                else if (tl.startsWith("modem") || tl.equals("pa")) key = "modem";
+                else if (tl.startsWith("pm8916")) key = "pmic";
+                else key = type;
+                if (!o.has(key)) { o.put(key, v); continue; }
+                // tsens 有多个分区（cpu0-4/gpu/wlan…），CPU 取最高更有参考价值
+                if ("cpu".equals(key)) {
+                    try { o.put(key, Math.max(o.getDouble(key), v)); } catch (Throwable ignored) {}
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return o;
+    }
+
+    /**
+     * 整机内存（MB）：/proc/meminfo。
+     * 内核 3.10 没有 MemAvailable，用 MemTotal - MemFree - Buffers - Cached 近似。
+     */
+    private static JSONObject meminfo() {
+        JSONObject o = new JSONObject();
+        try {
+            java.io.BufferedReader r = new java.io.BufferedReader(new FileReader("/proc/meminfo"));
+            String line;
+            long total = -1, free = -1, buffers = 0, cached = 0, avail = -1;
+            while ((line = r.readLine()) != null) {
+                int c = line.indexOf(':');
+                if (c <= 0) continue;
+                String k = line.substring(0, c).trim();
+                String v = line.substring(c + 1).trim().split("\\s+")[0];
+                long n;
+                try { n = Long.parseLong(v); } catch (Throwable t) { continue; }
+                if ("MemTotal".equals(k)) total = n;
+                else if ("MemFree".equals(k)) free = n;
+                else if ("Buffers".equals(k)) buffers = n;
+                else if ("Cached".equals(k)) cached = n;
+                else if ("MemAvailable".equals(k)) avail = n;
+            }
+            r.close();
+            if (total >= 0) o.put("totalMb", total / 1024);
+            long used = -1;
+            if (avail >= 0 && total >= 0) {
+                used = total - avail;
+                o.put("availMb", avail / 1024);
+            } else if (free >= 0 && total >= 0) {
+                used = total - free - buffers - cached;
+                o.put("availMb", (free + buffers + cached) / 1024);
+            }
+            if (used >= 0) o.put("usedMb", used / 1024);
+        } catch (Throwable ignored) {
+        }
+        return o;
+    }
+
 
     private static JSONObject signal(Context ctx) {
         JSONObject s = new JSONObject();

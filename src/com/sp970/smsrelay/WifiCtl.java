@@ -74,6 +74,8 @@ public final class WifiCtl {
             o.put("wifiOn", sta);
             o.put("driver", driver);
             o.put("hardware", hw);
+            // 当前模式：ap / sta / off，面板用它做互斥页签渲染
+            o.put("mode", ap ? "ap" : (sta ? "sta" : "off"));
 
             WifiConfiguration c = apConfig(w);
             o.put("ssid", c == null ? "" : nz(c.SSID));
@@ -228,6 +230,89 @@ public final class WifiCtl {
             }
         }
 
+        if ("sta_connect".equals(action) || "sta_disconnect".equals(action)) {
+            try {
+                if (Boolean.TRUE.equals(apOn(w))) {
+                    return result(ctx, w, false, STA_BUSY_AP);
+                }
+                // 连接动作允许自动把 WiFi 打开（面板上点「连接」不该被要求先点「开启」）
+                if (!w.isWifiEnabled()) {
+                    w.setWifiEnabled(true);
+                    sleep(2600);
+                    if (!w.isWifiEnabled()) {
+                        return result(ctx, w, false, "WiFi 开启失败：系统拒绝");
+                    }
+                }
+                if ("sta_disconnect".equals(action)) {
+                    boolean r = w.disconnect();
+                    sleep(900);
+                    Logs.add("wifi", "断开 station → " + r);
+                    return result(ctx, w, true,
+                            r ? "已断开当前 WiFi 连接" : "断开命令被系统拒绝（可能本就未连接）");
+                }
+                if (ssid == null || ssid.trim().length() == 0) {
+                    return result(ctx, w, false, "SSID 不能为空");
+                }
+                String target = ssid.trim();
+                Logs.add("wifi", "sta_connect: " + target);
+
+                // 1. 先翻已存配置：同 SSID 直接启用，避免每次连接都堆一条新配置
+                int netId = -1;
+                java.util.List<WifiConfiguration> saved = w.getConfiguredNetworks();
+                if (saved != null) {
+                    for (int i = 0; i < saved.size(); i++) {
+                        WifiConfiguration c = saved.get(i);
+                        if (c == null || c.SSID == null) continue;
+                        String s = nz(c.SSID);
+                        if (s.startsWith("\"") && s.endsWith("\"") && s.length() >= 2) {
+                            s = s.substring(1, s.length() - 1);
+                        }
+                        if (s.equals(target)) { netId = c.networkId; break; }
+                    }
+                }
+                // 2. 没有已存配置（或带密码重连）就新建；同 SSID 已存但带了新密码时先删旧的
+                if (pass != null && pass.length() > 0 && netId >= 0) {
+                    w.removeNetwork(netId);
+                    netId = -1;
+                }
+                if (netId < 0) {
+                    netId = w.addNetwork(buildConfig(target, pass));
+                    if (netId < 0) {
+                        return result(ctx, w, false, "保存网络配置失败（系统拒绝）");
+                    }
+                }
+                if (!w.enableNetwork(netId, true)) {
+                    return result(ctx, w, false, "启用网络失败（系统拒绝）");
+                }
+                boolean re = w.reconnect();
+                Logs.add("wifi", "reconnect → " + re + " netId=" + netId);
+
+                // 3. 轮询等连接：SSID 对上且拿到 IP 才算成功，最长 ~18s
+                String curSsid = "";
+                for (int i = 0; i < 12; i++) {
+                    sleep(1500);
+                    WifiInfo wi = w.getConnectionInfo();
+                    if (wi != null) {
+                        curSsid = nz(wi.getSSID());
+                        if (curSsid.startsWith("\"") && curSsid.endsWith("\"") && curSsid.length() >= 2) {
+                            curSsid = curSsid.substring(1, curSsid.length() - 1);
+                        }
+                        if (target.equals(curSsid) && wi.getIpAddress() != 0) {
+                            String ip = intToIp(wi.getIpAddress());
+                            Logs.add("wifi", "已连接 " + target + " ip=" + ip);
+                            return result(ctx, w, true,
+                                    "已连接 " + target + "（IP " + ip + "）");
+                        }
+                    }
+                }
+                return result(ctx, w, false,
+                        "未能连接到 " + target + "（密码错误 / 信号太弱 / 路由器未放行）；"
+                        + "当前状态见下方连接信息");
+            } catch (Throwable t) {
+                return result(ctx, w, false, "连接失败: " + root(t));
+            }
+        }
+
         if ("off".equals(action) || "ap_off".equals(action)) {
             try {
                 apEnableMethod().invoke(w, null, false);
@@ -316,7 +401,8 @@ public final class WifiCtl {
 
     private static WifiConfiguration buildConfig(String ssid, String pass) {
         WifiConfiguration cfg = new WifiConfiguration();
-        cfg.SSID = ssid;
+        // SSID 必须带引号（WifiConfiguration 规范格式），不带引号 supplicant 不认
+        cfg.SSID = ssid.startsWith("\"") ? ssid : "\"" + ssid + "\"";
         if (pass == null || pass.length() == 0) {
             cfg.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE);
         } else {
