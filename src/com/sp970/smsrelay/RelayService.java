@@ -45,6 +45,7 @@ public class RelayService extends Service {
     public void onCreate() {
         super.onCreate();
         db = new Db(this);
+        db.purgeOrphans();          // 还原数据库/事务中断留下的孤儿投递先清掉
         PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
         wakelock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "smsrelay:send");
         wakelock.setReferenceCounted(false);

@@ -13,7 +13,7 @@
 |---|---|
 | `SmsReceiver` | 监听 `SMS_RECEIVED`（优先级 999），不抢占默认短信 App，4.4 收到广播即转发 |
 | `RelayService` | 常驻前台服务：扫库 → 多通道并发投递 → 标记成功/失败；同时托管 Web 面板 |
-| `Db` | SQLite 三表：`ev`（收信本体，hash 去重）+ `dl`（消息×通道投递状态，退避 1/2/4/8/16/30min，上限按通道配置）+ `out`（发件记录） |
+| `Db` | SQLite 三表：`ev`（收信本体，号码+内容+90s 窗口去重）+ `dl`（消息×通道投递状态，退避 1/2/4/8/16/30min，上限按通道配置）+ `out`（发件记录） |
 | `Sender` | 钉钉（text 或 markdown 卡片，可选 SEC 加签）/ 通用 webhook（JSON + 可选 X-Token），多设备标签，UTF-8 |
 | `SmsSender` / `SendReceiver` | 面板发短信：分片发送，逐片回写结果 |
 | `Inbox` | 补收：把系统收件箱里漏转发的短信补进队列 |
@@ -114,6 +114,9 @@ adb shell am start -n com.sp970.smsrelay/.MainActivity   # 必须！解除 stopp
 adb push config/smsrelay.conf /sdcard/smsrelay.conf
 ```
 
+`MainActivity.onCreate` 会顺手 `startService`，所以一句 `am start` 就能把常驻服务和面板带起来
+（早期版本要另外 `am startservice -n com.sp970.smsrelay/.RelayService`）。
+
 签名注意：`debug.keystore` 不入库，换机器重建会得到不同证书，`install -r` 会报
 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`，需先 `adb uninstall`（会清掉 `relay.db` 历史，
 `/sdcard/smsrelay.conf` 不受影响）。
@@ -128,6 +131,30 @@ sh tools/smoke-test.sh 192.168.42.129:8080 admin:admin 10086
 
 脚本会逐项打面板接口（无凭据 401、首页、status/sys/messages/outbox/config/logs/wifi、
 注入测试消息、补收），最后汇总通过/失败项。
+
+## 真机验证记录（SP970-B / 4.4.4 / 2026-11-06）
+
+`tools/smoke-test.sh` 11 项全通过，外加以下人工确认：
+
+| 项 | 结果 |
+|---|---|
+| 收信链路 | 面板发 `105` 给 10086 → 10086 真实回复 → `SMS_RECEIVED` 入库 → 钉钉送达（status=1） |
+| 发信链路 | `/api/send` 到 10086，`out.status=1`，`parts=1`，无错误 |
+| 补收去重 | 连续 3 次 `/api/inbox/import`，events 不变、新增 0 条 |
+| 配置写回 | POST 原样回写 → `/sdcard/smsrelay.conf` 留下注释头 + 合法 JSON，中文与 `\n` 无损 |
+| 配置校验 | `maxTries=999` / `type=ftp` / 非 http url 三种非法输入均被拒，且不污染已存配置 |
+| 面板换端口 | 8080→8081 返回 `restarted:true`，8081 可访问、8080 关闭；改回 8080 同样生效 |
+| 信号读数 | LTE 下 `dbm=-96 / level=2 / asu=43`，与 `dumpsys telephony.registry` 的 `rsrp=-97` 一致 |
+| WiFi | 本机无 `wlan0`，`/api/wifi` 明确给出 `hint`，客户端列表不再把 RNDIS 对端算进去 |
+
+真机暴露并已修掉的两个问题：
+
+1. **信号恒为「未知」**：4.4 上 `SignalStrength.getGsmSignalStrength()` 在纯 LTE 下返回 99，
+   原实现据此判成无信号。改为解析 `SignalStrength.toString()` 的字段，优先取 LTE `rsrp`。
+2. **补收会重复转发 + `pending` 卡住**：去重键原来是 `MD5(ts|peer|body)`，广播的短信中心时间戳
+   与收件箱 `date` 差 2 秒就会被当成新短信；同时历史遗留的孤儿 `dl` 记录（`ev_id` 指向已不存在的事件）
+   被 `due()` 的 INNER JOIN 跳过，永远停在 `status=0`。现在改为「号码+内容+90s 窗口」判重，
+   并在服务启动时用 `purgeOrphans()` 清掉孤儿投递。
 
 ## 调试通道（无屏利器）
 

@@ -110,6 +110,9 @@ public class MainActivity extends Activity {
         setContentView(sv);
 
         etJson.setText(AppConfig.effectiveJson(this));
+
+        // 装上之后没有重启也不会有人点按钮，这里兜一次：界面被拉起来就把常驻服务带起来
+        startService(new Intent(this, RelayService.class));
     }
 
     @Override

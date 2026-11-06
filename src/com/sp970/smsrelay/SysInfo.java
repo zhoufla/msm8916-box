@@ -54,16 +54,7 @@ public final class SysInfo {
                 public void onSignalStrengthsChanged(SignalStrength ss) {
                     if (ss == null) return;
                     try {
-                        int a = ss.getGsmSignalStrength();
-                        if (a >= 0 && a <= 31) {
-                            asu = a;
-                            dbm = -113 + 2 * a;
-                            level = a <= 1 ? 0 : a <= 4 ? 1 : a <= 8 ? 2 : a <= 12 ? 3 : 4;
-                        } else {
-                            asu = -1;
-                            dbm = 0;
-                            level = 0;
-                        }
+                        applySignal(ss);
                     } catch (Throwable ignored) {
                     }
                 }
@@ -85,6 +76,60 @@ public final class SysInfo {
             Logs.add("sys", "信号监听已注册");
         } catch (Throwable t) {
             Logs.add("sys", "信号监听注册失败: " + t);
+        }
+    }
+
+    /**
+     * 取一次信号读数。
+     *
+     * Android 4.4 的 SignalStrength 只有 GSM 的公开取值，而纯 LTE 网络下
+     * {@link SignalStrength#getGsmSignalStrength()} 恒为 99（未知），真实读数在 LTE 的 rsrp 上
+     * （本机实测 "SignalStrength: 99 0 -120 -160 -120 -1 -1 25 -97 -14 -12 ..."）。
+     * 所以这里解析 toString()：字段顺序 4.x 到 13 都稳定，也不碰隐藏 API。
+     */
+    static void applySignal(SignalStrength ss) {
+        String s = ss.toString();
+        int i = s.indexOf(':');
+        if (i < 0) return;
+        String[] p = s.substring(i + 1).trim().split("\\s+");
+        int gsm = tok(p, 0);       // GSM asu，99 = 未知
+        int cdmaDbm = tok(p, 2);   // 2G/3G CDMA
+        int rsrp = tok(p, 8);      // LTE rsrp (dBm)
+
+        if (rsrp >= -140 && rsrp <= -44) {          // 有 LTE 读数时以它为准
+            asu = rsrp + 140;                       // 0~97
+            dbm = rsrp;
+            level = rsrp >= -85 ? 4 : rsrp >= -95 ? 3 : rsrp >= -105 ? 2
+                    : rsrp >= -115 ? 1 : 0;
+            return;
+        }
+        if (gsm >= 0 && gsm <= 31) {                // 2G / 3G 用 GSM 刻度
+            asu = gsm;
+            dbm = -113 + 2 * gsm;
+            level = gsm <= 1 ? 0 : gsm <= 4 ? 1 : gsm <= 8 ? 2 : gsm <= 12 ? 3 : 4;
+            return;
+        }
+        if (cdmaDbm < 0 && cdmaDbm > -120) {        // 电信 2G / 3G
+            dbm = cdmaDbm;
+            asu = Math.max(0, Math.min(16, (cdmaDbm + 113) / 2));
+            level = cdmaDbm >= -75 ? 4 : cdmaDbm >= -85 ? 3 : cdmaDbm >= -95 ? 2
+                    : cdmaDbm >= -100 ? 1 : 0;
+            return;
+        }
+        asu = -1;
+        dbm = 0;
+        level = 0;
+    }
+
+    /** 第 i 个数字字段（高版本可能带小数）；取不到返回 Integer.MIN_VALUE。 */
+    private static int tok(String[] p, int i) {
+        if (i >= p.length) return Integer.MIN_VALUE;
+        try {
+            double d = Double.parseDouble(p[i]);
+            if (d > Integer.MAX_VALUE || d < Integer.MIN_VALUE) return Integer.MIN_VALUE;
+            return (int) d;
+        } catch (Throwable t) {
+            return Integer.MIN_VALUE;
         }
     }
 
