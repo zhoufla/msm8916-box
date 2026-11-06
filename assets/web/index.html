@@ -183,6 +183,7 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
       <button class="btn sm" onclick="loadMsgs()">刷新</button>
       <button class="btn sm" onclick="importInbox()">补收系统收件箱</button>
       <button class="btn sm" onclick="injectTest()">注入测试消息</button>
+      <button class="btn sm ghost" onclick="clearGivenUp()">清理已放弃</button>
       <span class="hint" style="flex:1 1 200px;text-align:right">最近 50 条，含各通道投递状态</span>
     </div>
     <div id="msgList"><div class="empty">加载中…</div></div>
@@ -457,9 +458,22 @@ function loadMsgs(){
         '<div class="acts">'+chs+
         (m.code?'<button class="btn sm ghost" onclick="copyText(\''+esc(m.code)+'\')">复制验证码</button>':'')+
         '<button class="btn sm ghost" onclick="retryMsg('+m.id+')">重发</button>'+
+        '<button class="btn sm ghost" onclick="delMsg('+m.id+')">删除</button>'+
         '</div></div>';
     }
     $('msgList').innerHTML=h||'<div class="empty">还没有收到短信</div>';
+  });
+}
+function delMsg(id){
+  if(!confirm('删除短信 #'+id+' ？连同它的各通道投递记录一起删，不可恢复')) return;
+  api('POST','/api/messages/delete',{id:id},function(d){
+    toast(d.message||d.error||'已删除', !d.ok); loadMsgs(); loadOverview();
+  });
+}
+function clearGivenUp(){
+  if(!confirm('清掉所有「已放弃」的投递记录？对应短信若已无其他投递会一并删除')) return;
+  api('POST','/api/messages/delete',{scope:'givenup'},function(d){
+    toast(d.message||d.error||'已清理', !d.ok); loadMsgs(); loadOverview();
   });
 }
 function retryMsg(id){
@@ -509,9 +523,17 @@ function loadOutbox(){
         '<span class="chip '+cls+'">'+txt+'</span></div>'+
         '<div class="body">'+esc(m.body)+'</div>'+
         '<div class="top" style="margin:0"><span class="mono">'+esc(m.iso)+'</span>'+
-        '<span>'+m.parts+' 片'+(m.err?' · '+esc(m.err):'')+'</span></div></div>';
+        '<span>'+m.parts+' 片'+(m.err?' · '+esc(m.err):'')+'</span></div>'+
+        '<div class="acts"><button class="btn sm ghost" onclick="delOut('+m.id+')">删除</button></div>'+
+        '</div>';
     }
     $('outList').innerHTML=h||'<div class="empty">还没有发送记录</div>';
+  });
+}
+function delOut(id){
+  if(!confirm('删除发件记录 #'+id+' ？（只删记录，已发出的短信收不回来）')) return;
+  api('POST','/api/outbox/delete',{id:id},function(d){
+    toast(d.message||d.error||'已删除', !d.ok); loadOutbox();
   });
 }
 

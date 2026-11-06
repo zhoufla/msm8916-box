@@ -180,6 +180,14 @@ public final class WebPanel {
             if (!post) throw new IllegalArgumentException("需要 POST");
             return Http.Resp.json(inject(p));
         }
+        if ("/api/messages/delete".equals(path)) {
+            if (!post) throw new IllegalArgumentException("需要 POST");
+            return Http.Resp.json(deleteMsg(p));
+        }
+        if ("/api/outbox/delete".equals(path)) {
+            if (!post) throw new IllegalArgumentException("需要 POST");
+            return Http.Resp.json(deleteOut(p));
+        }
         if ("/api/inbox/import".equals(path)) {
             if (!post) throw new IllegalArgumentException("需要 POST");
             int n = Inbox.importAll(app);
@@ -388,6 +396,39 @@ public final class WebPanel {
         JSONObject o = new JSONObject();
         o.put("ok", true);
         o.put("message", "已重新入队，稍后刷新");
+        return o.toString();
+    }
+
+    private String deleteMsg(JSONObject p) throws Exception {
+        Db db = db();
+        JSONObject o = new JSONObject();
+        if ("givenup".equals(p.optString("scope", ""))) {
+            int[] n = db.deleteGivenUp();
+            Logs.add("panel", "清理已放弃投递 dl=" + n[0] + " ev=" + n[1]);
+            o.put("ok", true);
+            o.put("deleted", n[0]);
+            o.put("message", n[0] == 0 ? "没有已放弃的记录" : "已清理 " + n[0] + " 条放弃投递");
+            return o.toString();
+        }
+        long id = p.optLong("id", 0);
+        if (id <= 0) throw new IllegalArgumentException("缺少消息 id");
+        boolean gone = db.deleteEvent(id);
+        Logs.add("panel", "删除短信 evId=" + id + (gone ? "" : " 不存在"));
+        o.put("ok", gone);
+        o.put("deleted", gone ? 1 : 0);
+        o.put("message", gone ? "已删除 #" + id : "没有这条记录（可能已被清理）");
+        return o.toString();
+    }
+
+    private String deleteOut(JSONObject p) throws Exception {
+        long id = p.optLong("id", 0);
+        if (id <= 0) throw new IllegalArgumentException("缺少记录 id");
+        boolean gone = db().deleteOut(id);
+        Logs.add("panel", "删除发件记录 id=" + id + (gone ? "" : " 不存在"));
+        JSONObject o = new JSONObject();
+        o.put("ok", gone);
+        o.put("deleted", gone ? 1 : 0);
+        o.put("message", gone ? "已删除 #" + id : "没有这条记录（可能已被清理）");
         return o.toString();
     }
 
