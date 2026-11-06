@@ -160,6 +160,8 @@ public final class CpuFreq {
             String maxNow = sec(r.out, "##MAX");
             String minNow = sec(r.out, "##MIN");
             boolean ok = String.valueOf(max).equals(maxNow) && String.valueOf(min).equals(minNow);
+            // 配置存独立 prefs 键，与共享的 config JSON 解耦（防其它保存路径回退）
+            save(ctx, auto, max, min);
             Logs.add("maint", "CPU 限频 → max=" + max + " min=" + min + " auto=" + auto
                     + " 生效=" + ok);
             JSONObject o = new JSONObject();
@@ -177,17 +179,115 @@ public final class CpuFreq {
         }
     }
 
+    // ---------- 配置存取（独立 SharedPreferences 键） ----------
+    //
+    // ⚠ 不放进 AppConfig 的 maint 段：那会被 /api/config（通道/登录保存）、
+    // /api/maint/config（helper 配置）等多条路径整段重写，旧页面一保存就回退
+    // （2026-11-07 真机踩过「维持开关被改回仅一次」）。独立键谁也碰不到。
+
+    /** CPU 限频配置（enabled/max/min）。 */
+    public static final class CpuCfg {
+        public boolean enabled;
+        public long maxKhz;
+        public long minKhz;
+    }
+
+    private static final String K_ENABLED = "cpuLimitEnabled";
+    private static final String K_MAX = "cpuMaxKhz";
+    private static final String K_MIN = "cpuMinKhz";
+
+    public static CpuCfg load(Context ctx) {
+        CpuCfg c = new CpuCfg();
+        try {
+            android.content.SharedPreferences sp =
+                    ctx.getSharedPreferences(AppConfig.PREFS, Context.MODE_PRIVATE);
+            c.enabled = sp.getBoolean(K_ENABLED, false);
+            c.maxKhz = sp.getLong(K_MAX, 0);
+            c.minKhz = sp.getLong(K_MIN, 0);
+        } catch (Throwable ignored) {
+        }
+        return c;
+    }
+
+    public static void save(Context ctx, boolean enabled, long maxKhz, long minKhz) {
+        android.content.SharedPreferences.Editor e =
+                ctx.getSharedPreferences(AppConfig.PREFS, Context.MODE_PRIVATE).edit();
+        e.putBoolean(K_ENABLED, enabled);
+        e.putLong(K_MAX, maxKhz);
+        e.putLong(K_MIN, minKhz);
+        e.commit();
+    }
+
+    /**
+     * 关闭限频：停止维持并立即解除（max 写回可用表最大值，恢复全速）。
+     */
+    public static JSONObject disable(Context ctx) {
+        try {
+            // 只停用维持，保留已保存的限值（总开关再打开时能直接恢复）
+            CpuCfg prev = load(ctx);
+            save(ctx, false, prev.maxKhz, prev.minKhz);
+            long[] av = FreqTable.parseFreqs(rootCat(ctx, BASE + "/scaling_available_frequencies"));
+            if (av.length == 0) return fail("读不到可用频率表");
+            long full = av[av.length - 1];
+            long min;
+            try { min = Long.parseLong(rootCat(ctx, BASE + "/scaling_min_freq")); }
+            catch (Throwable t) { min = av[0]; }
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < 4; i++) {
+                sb.append("[ -d /sys/devices/system/cpu/cpu").append(i)
+                  .append("/cpufreq ] || continue;")
+                  .append(" echo ").append(full)
+                  .append(" > /sys/devices/system/cpu/cpu").append(i)
+                  .append("/cpufreq/scaling_max_freq;")
+                  .append(" echo ").append(min)
+                  .append(" > /sys/devices/system/cpu/cpu").append(i)
+                  .append("/cpufreq/scaling_min_freq;");
+            }
+            sb.append(" echo '##MAX'; cat ").append(BASE).append("/scaling_max_freq");
+            Root.Result r = Root.exec(ctx, sb.toString());
+            String maxNow = sec(r.out, "##MAX");
+            boolean ok = r.ok() && String.valueOf(full).equals(maxNow);
+            Logs.add("maint", "CPU 限频关闭 → 恢复全速 " + full + " 生效=" + ok);
+            JSONObject o = new JSONObject();
+            try {
+                o.put("ok", ok);
+                o.put("message", ok ? "限频已关闭：恢复全速 " + FreqTable.fmtMhz(full)
+                        : "解除失败（max=" + maxNow + "）");
+            } catch (Throwable ignored) {}
+            return o;
+        } catch (Throwable t) {
+            return fail("关闭限频失败: " + t);
+        }
+    }
+
+    /** 仅启停维持（不动频率值）：on 时用已保存的 max/min 继续维持，并立即应用一次。 */
+    public static JSONObject setEnabled(Context ctx, boolean on) {
+        CpuCfg c = load(ctx);
+        if (on && c.maxKhz <= 0) {
+            return fail("还没有应用过限频，请先选频率点「应用」");
+        }
+        save(ctx, on, c.maxKhz, c.minKhz);
+        Logs.add("maint", "CPU 限频维持 → " + (on ? "开启" : "暂停"));
+        if (on) return apply(ctx, c.minKhz, c.maxKhz, true);
+        JSONObject o = new JSONObject();
+        try {
+            o.put("ok", true);
+            o.put("message", "维持已暂停（当前限值仍生效，循环不再校正）");
+        } catch (Throwable ignored) {}
+        return o;
+    }
+
     /**
      * 服务循环校正：已启用且实际 max 与配置不一致时重新应用。
      * thermal/厂商脚本改回去的场景在这里被拉回；helper 不可用就等下一轮。
      */
     public static void enforce(Context ctx) {
         try {
-            AppConfig cfg = AppConfig.load(ctx);
-            if (!cfg.cpuLimitEnabled || cfg.cpuMaxKhz <= 0) return;
+            CpuCfg c = load(ctx);
+            if (!c.enabled || c.maxKhz <= 0) return;
             String cur = rootCat(ctx, BASE + "/scaling_max_freq");
-            if (cur.length() == 0 || String.valueOf(cfg.cpuMaxKhz).equals(cur)) return;
-            apply(ctx, cfg.cpuMinKhz, cfg.cpuMaxKhz, true);
+            if (cur.length() == 0 || String.valueOf(c.maxKhz).equals(cur)) return;
+            apply(ctx, c.minKhz, c.maxKhz, true);
         } catch (Throwable ignored) {
         }
     }

@@ -54,11 +54,8 @@ public final class AppConfig {
     // 维护段
     public boolean maintHealthEnabled = true;
     public int maintHealthIntervalMin = 30;
-
-    // CPU 限频：0 = 不限制/用当前值；enabled 时服务循环周期校正（对抗 thermal/厂商脚本）
-    public boolean cpuLimitEnabled = false;
-    public long cpuMaxKhz = 0;
-    public long cpuMinKhz = 0;
+    // CPU 限频配置已移到 CpuFreq 的独立 SharedPreferences 键（不进 config JSON，
+    // 防止 /api/config、helper 配置等保存路径整段重写导致「维持开关被改回」）
 
     // SIM 锁（B2 第 16 项）：ICCID 白名单。action = log（只记录）/ block（停止转发）
     public boolean simLockEnabled = false;
@@ -201,11 +198,6 @@ public final class AppConfig {
                 maintHealthEnabled = mt.optBoolean("healthEnabled", maintHealthEnabled);
                 int g = mt.optInt("healthIntervalMin", maintHealthIntervalMin);
                 if (g >= 1 && g <= 24 * 60) maintHealthIntervalMin = g;
-                cpuLimitEnabled = mt.optBoolean("cpuLimitEnabled", cpuLimitEnabled);
-                long cm = mt.optLong("cpuMaxKhz", cpuMaxKhz);
-                if (cm >= 0) cpuMaxKhz = cm;
-                long cn = mt.optLong("cpuMinKhz", cpuMinKhz);
-                if (cn >= 0) cpuMinKhz = cn;
             }
 
             JSONObject sl = root.optJSONObject("simLock");
@@ -334,9 +326,6 @@ public final class AppConfig {
             JSONObject mt = new JSONObject();
             mt.put("healthEnabled", meta == null || meta.maintHealthEnabled);
             mt.put("healthIntervalMin", meta == null ? 30 : meta.maintHealthIntervalMin);
-            mt.put("cpuLimitEnabled", meta != null && meta.cpuLimitEnabled);
-            mt.put("cpuMaxKhz", meta == null ? 0 : meta.cpuMaxKhz);
-            mt.put("cpuMinKhz", meta == null ? 0 : meta.cpuMinKhz);
             root.put("maint", mt);
             JSONObject sl = new JSONObject();
             sl.put("enabled", meta != null && meta.simLockEnabled);
