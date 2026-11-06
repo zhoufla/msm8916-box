@@ -95,8 +95,10 @@ public class RelayService extends Service {
             int sent = 0;
             try {
                 AppConfig cfg = AppConfig.load(this);
+                // SIM 锁（B2 #16）：卡不在白名单且 action=block 时停止转发，消息仍然入库
+                boolean simBlocked = Radio.enforceSimLock(this);
                 List<Deliver> list = db.due(10);
-                if (!list.isEmpty() && cfg.activeCount() > 0) {
+                if (!list.isEmpty() && cfg.activeCount() > 0 && !simBlocked) {
                     wakelock.acquire(60000);
                     try {
                         for (int i = 0; i < list.size(); i++) {
@@ -130,6 +132,7 @@ public class RelayService extends Service {
                 }
                 if (sent > 0) db.prune();
                 Update.tick(this);          // 到点才真的去查，内部自己起线程
+                Maint.tick(this);           // 定时体检落盘，异常进日志，内部自己起线程
             } catch (Throwable t) {
                 android.util.Log.e("SmsRelay", "loop", t);
             }

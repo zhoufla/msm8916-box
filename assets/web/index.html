@@ -124,6 +124,10 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
 .logline{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;color:var(--dim);
   padding:3px 0;border-bottom:1px dashed rgba(38,51,74,.5);word-break:break-all}
 .logline b{color:var(--accent);font-weight:500}
+pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:10px;
+  font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;color:var(--dim);
+  white-space:pre-wrap;word-break:break-all;max-height:340px;overflow:auto;margin:10px 0 0}
+.checks{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
 </style>
 </head>
 <body>
@@ -144,7 +148,9 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
       <button data-v="chs">通道</button>
       <button data-v="sys">系统</button>
       <button data-v="wifi">WiFi</button>
+      <button data-v="net">网络</button>
       <button data-v="upd">升级</button>
+      <button data-v="maint">维护</button>
     </nav>
   </div>
 </header>
@@ -291,6 +297,149 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
         <button class="btn sm" onclick="scanWifi()">扫描周边 WiFi</button>
         <div id="scanList" style="margin-top:9px"></div>
       </div>
+      <div class="card" style="grid-column:1/-1">
+        <h3>无线高级（B2）</h3>
+        <div class="row" style="margin-bottom:8px">
+          <button class="btn sm" onclick="loadWifiAdv()">读取无线详情</button>
+          <span class="hint" id="wadvHint">以下动作都要求热点正在运行</span>
+        </div>
+        <div id="wadvInfo" class="hint">还没读取</div>
+        <div class="sep"></div>
+        <div id="wadvClients"></div>
+        <div class="sep"></div>
+        <div class="grid g3">
+          <label class="fld"><span>最大关联数（1–32）</span><input id="wadvMax" type="number" min="1" max="32" value="10"></label>
+          <label class="fld"><span>踢客户端（MAC）</span><input id="wadvKick" placeholder="aa:bb:cc:dd:ee:ff"></label>
+          <label class="fld"><span>SSID 广播</span>
+            <select id="wadvHide"><option value="0">正常广播</option><option value="1">隐藏 SSID</option></select></label>
+        </div>
+        <div class="row">
+          <button class="btn sm" onclick="wadv('maxassoc','wadvMax')">设关联上限</button>
+          <button class="btn sm" onclick="wadv('kick','wadvKick')">踢掉</button>
+          <button class="btn sm" onclick="wadvHideApply()">应用 SSID 广播</button>
+          <button class="btn sm ghost" onclick="wadvAuto(1)">开自动信道</button>
+          <button class="btn sm ghost" onclick="wadvAuto(0)">关自动信道</button>
+        </div>
+        <div class="hint" style="margin-top:8px">
+          这台固件的 hostapd 是裁剪构建（没有 set/reload/status），iwpriv 在 AP 模式只给
+          <code>hideSSID</code> / <code>setMaxAssoc</code> / <code>setAutoChannel</code>。
+          <b>改信道、改发射功率、MAC 白名单在 AP 模式下没有可用原语</b>（框架每次开热点会重写
+          <code>hostapd.conf</code>，改了也会被覆盖），所以没做这几个按钮。
+        </div>
+        <pre class="term" id="wadvOut" style="display:none"></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- 网络：B2 换卡救砖（APN / 制式 / 数据 / SIM 锁 / 流量 / 诊断） -->
+  <section class="view" id="v-net">
+    <div class="grid g2">
+      <div class="card">
+        <h3>移动网络</h3>
+        <div id="netState" class="hint">读取中…</div>
+        <div class="sep"></div>
+        <div class="row">
+          <span class="hint" style="min-width:64px">移动数据</span>
+          <div class="sw" id="swData" onclick="toggleData()"><i></i></div>
+          <span class="hint" style="min-width:64px;margin-left:12px">数据漫游</span>
+          <div class="sw" id="swRoam" onclick="toggleRoam()"><i></i></div>
+        </div>
+        <div class="hint" style="margin-top:8px">开/关数据会短暂断开移动网络；SIM 卡号（ICCID）走 app 侧 TelephonyManager 读取。</div>
+      </div>
+
+      <div class="card">
+        <h3>网络制式</h3>
+        <label class="fld"><span>首选网络类型</span>
+          <select id="netMode">
+            <option value="9">GSM/WCDMA/LTE 自动（推荐）</option>
+            <option value="8">仅 LTE（4G）</option>
+            <option value="3">GSM/WCDMA 自动</option>
+            <option value="1">仅 GSM（2G）</option>
+            <option value="2">仅 WCDMA（3G）</option>
+            <option value="22">TD/GSM/WCDMA 全制式（原厂值）</option>
+            <option value="23">LTE/TD/CDMA/GSM/WCDMA</option>
+          </select></label>
+        <div class="row">
+          <button class="btn sm primary" onclick="applyMode(false)">写入</button>
+          <button class="btn sm danger" onclick="applyMode(true)">写入并重启</button>
+        </div>
+        <div class="hint" style="margin-top:8px">4.4 的 Phone 对象在开机时读 preferred_network_mode，<b>写入后要重启才生效</b>；原厂值带后缀（如 <code>22,1</code>），写入时会原样保留。</div>
+      </div>
+
+      <div class="card" style="grid-column:1/-1">
+        <h3>APN（<span id="apnNumeric">-</span>）</h3>
+        <div class="row" style="margin-bottom:8px">
+          <button class="btn sm" onclick="loadApns()">刷新</button>
+          <button class="btn sm ghost" onclick="newApn()">+ 新增 APN</button>
+          <span class="hint" id="apnHint" style="flex:1 1 200px;text-align:right"></span>
+        </div>
+        <div id="apnList"><div class="empty">读取中…</div></div>
+        <div class="sep"></div>
+        <div class="grid g3">
+          <label class="fld"><span>名称</span><input id="apName" placeholder="China Mobile"></label>
+          <label class="fld"><span>APN</span><input id="apApn" placeholder="cmnet"></label>
+          <label class="fld"><span>类型</span><input id="apType" placeholder="default,supl"></label>
+          <label class="fld"><span>用户名（可空）</span><input id="apUser"></label>
+          <label class="fld"><span>密码（可空）</span><input id="apPass"></label>
+          <label class="fld"><span>协议</span><input id="apProto" value="IPV4V6"></label>
+        </div>
+        <div class="row">
+          <button class="btn sm primary" onclick="saveApn()">保存 APN</button>
+          <span class="hint" id="apEdit" style="flex:1 1 200px">当前是新增模式；点列表里的「编辑」会切到修改模式</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>流量统计</h3>
+        <div id="netTraffic" class="hint">读取中…</div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn sm" onclick="clearTraffic(this)">清零</button>
+          <span class="hint">基线存在 app 里，不搬 webkey 的统计文件</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>SIM 锁（ICCID 白名单）</h3>
+        <div class="row" style="margin-bottom:8px">
+          <div class="sw" id="swSimLock" onclick="toggleSimLock()"><i></i></div>
+          <span class="hint" id="simLockHint">读取中…</span>
+        </div>
+        <label class="fld"><span>不在白名单时</span>
+          <select id="simLockAction">
+            <option value="log">只记日志（不拦转发）</option>
+            <option value="block">停止转发（消息仍入库）</option>
+          </select></label>
+        <label class="fld"><span>白名单（整串 ICCID 或末 4 位，逗号/换行分隔）</span>
+          <textarea id="simLockList" rows="3"></textarea></label>
+        <div class="row">
+          <button class="btn sm primary" onclick="saveSimLock(this)">保存</button>
+          <button class="btn sm ghost" onclick="addCurrentIccid()">把当前卡加入白名单</button>
+        </div>
+      </div>
+
+      <div class="card" style="grid-column:1/-1">
+        <h3>网络诊断</h3>
+        <div class="grid g3">
+          <label class="fld"><span>类型</span><select id="ndKind" onchange="ndKindChange()">
+            <option value="attach">附着状态（SIM/运营商/子系统/网卡/路由）</option>
+            <option value="ping">ping</option>
+            <option value="trace">traceroute</option>
+            <option value="dns">DNS 解析</option>
+            <option value="http">HTTP 探测</option>
+            <option value="route">路由与地址</option>
+            <option value="neigh">ARP 邻居</option>
+            <option value="sockets">端口连接</option>
+            <option value="tcpdump">抓包（落盘到 Download）</option>
+          </select></label>
+          <label class="fld"><span>目标（域名/IP/URL）</span><input id="ndTarget" placeholder="114.114.114.114"></label>
+          <label class="fld"><span>次数 / 抓包秒数</span><input id="ndCount" type="number" min="1" max="20" value="4"></label>
+        </div>
+        <div class="row">
+          <button class="btn sm primary" onclick="runDiag(this)">执行</button>
+          <span class="hint" id="ndHint">抓包最多 20 秒、200 个包；结果文件在「维护 → 文件」里下载</span>
+        </div>
+        <pre class="term" id="ndOut">（结果显示在这里）</pre>
+      </div>
     </div>
   </section>
 
@@ -330,10 +479,8 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
         <label class="fld"><span>跳过证书校验（4.4 根证书太旧时用）</span>
           <select id="updInsecure"><option value="0">不跳过（推荐）</option><option value="1">跳过</option></select>
         </label>
-        <label class="fld"><span>静默安装用的本机 root 通道凭据（user:pass，留空不用）</span>
-          <input id="updWebkey" placeholder="admin:admin">
-        </label>
         <button class="btn primary" onclick="saveUpdCfg(this)">保存</button>
+        <div class="hint" style="margin-top:8px">静默安装走「维护」页里的 relay-helper root 通道，不再依赖厂商 web 后台凭据。</div>
         <div class="hint" style="margin-top:9px">安装包会验 sha256 + 签名一致才装，跳过证书校验也不会装进别人的包</div>
       </div>
       <div class="card">
@@ -343,11 +490,139 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
       <div class="card">
         <h3>安装方式</h3>
         <div class="hint" id="updHow">
-          有 root 时走 <code>su -c pm install -r</code> 静默装，装完自动拉起；
-          没有 root 会唤起系统安装器，需要手动点确认；两条都不走通就把 APK 留在
-          <span id="updDir" class="mono">/sdcard/Download</span>，用 adb 装。
+          走 relay-helper 的 root 通道执行 <code>pm install -r -d …; sleep 2; am start …</code>
+          （装包会杀进程，两条必须拼在同一条命令里），装完自动拉起；
+          helper 不可用时退回系统安装器，需手动点确认；都不行就把 APK 留在
+          <span id="updDir" class="mono">/sdcard/Download</span> 用 adb 装。
         </div>
         <div class="hint" style="margin-top:8px">cloud build：<code>git tag v1.2.0 &amp;&amp; git push --tags</code> 触发 GitHub Actions，编译签名后自动发 Release</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 维护：B0 地基 + P0 + B1 无人值守，特权动作全走 relay-helper -->
+  <section class="view" id="v-maint">
+    <div class="grid g2">
+      <div class="card">
+        <h3>root 通道</h3>
+        <div id="maintHelper" class="hint">读取中…</div>
+        <div class="sep"></div>
+        <label class="fld"><span>helper 地址（只听回环）</span><input id="mhUrl"></label>
+        <label class="fld"><span>token（与设备 /system/etc/relay-helper/token 一致）</span><input id="mhToken"></label>
+        <div class="grid g2">
+          <label class="fld"><span>定时体检</span><select id="mhHealth"><option value="1">开启</option><option value="0">关闭</option></select></label>
+          <label class="fld"><span>间隔（分钟）</span><input id="mhGap" type="number" min="1" max="1440" value="30"></label>
+        </div>
+        <button class="btn sm" onclick="saveMaintCfg(this)">保存配置</button>
+        <div class="hint" style="margin-top:8px">单面板、单端口、单套凭据：8080 的账号管所有入口，helper 不对外监听。</div>
+      </div>
+
+      <div class="card">
+        <h3>命令框（等价 shellinabox）</h3>
+        <label class="fld"><span>一条命令一次请求；输出上限 256KB / 90s</span>
+          <textarea id="mcCmd" rows="3">id</textarea></label>
+        <div class="row">
+          <button class="btn sm primary" onclick="runCmd(this)">执行</button>
+          <button class="btn sm ghost" onclick="quickCmd('uptime; cat /proc/uptime')">运行时长</button>
+          <button class="btn sm ghost" onclick="quickCmd('netstat -ltn')">端口</button>
+          <button class="btn sm ghost" onclick="quickCmd('getprop gsm.sim.state; getprop gsm.network.type')">SIM</button>
+        </div>
+        <pre class="term" id="mcOut">（执行结果显示在这里）</pre>
+        <div class="hint" style="margin-top:8px">通用 root 通道，没有白名单；拼错命令会直接作用于设备，敲之前想清楚。</div>
+      </div>
+
+      <div class="card">
+        <h3>一键体检</h3>
+        <div class="row" style="margin-bottom:8px">
+          <button class="btn sm primary" onclick="doCheckup(this)">开始体检</button>
+          <span class="hint" id="ckSummary">与开机窗口验证同一套判据</span>
+        </div>
+        <div class="checks" id="ckChecks"></div>
+        <div id="ckDetail"></div>
+      </div>
+
+      <div class="card">
+        <h3>日志</h3>
+        <div class="grid g3">
+          <label class="fld"><span>来源</span><select id="mlKind">
+            <option value="main">main/system</option><option value="radio">radio</option>
+            <option value="kernel">dmesg</option><option value="relay">logcat 全文</option>
+            <option value="all">全部 buffer</option></select></label>
+          <label class="fld"><span>过滤关键字</span><input id="mlFilter" placeholder="留空不过滤"></label>
+          <label class="fld"><span>行数</span><input id="mlLines" type="number" min="20" max="1000" value="200"></label>
+        </div>
+        <div class="row">
+          <button class="btn sm" onclick="doLogs()">读取</button>
+          <button class="btn sm" onclick="bundleLogs(this)">打包下载</button>
+        </div>
+        <pre class="term" id="mlOut">（日志显示在这里）</pre>
+      </div>
+
+      <div class="card">
+        <h3>电源与定位</h3>
+        <div class="row">
+          <button class="btn sm danger" onclick="doPower('reboot')">重启</button>
+          <button class="btn sm danger" onclick="doPower('shutdown')">关机</button>
+          <button class="btn sm danger" onclick="doPower('bootloader')">进 bootloader</button>
+        </div>
+        <div class="sep"></div>
+        <div class="row">
+          <button class="btn sm" onclick="doLed('on')">LED 亮</button>
+          <button class="btn sm" onclick="doLed('blink')">闪 8 下</button>
+          <button class="btn sm" onclick="doLed('off')">LED 灭</button>
+          <span class="hint">多根棒子时一眼找到是哪一台</span>
+        </div>
+        <div class="hint" style="margin-top:8px">重启会中断短信转发约 1 分钟；按钮有二次确认。</div>
+      </div>
+
+      <div class="card">
+        <h3>备份 / 恢复</h3>
+        <div class="row">
+          <button class="btn sm primary" onclick="doBackup(this)">立即备份</button>
+          <span class="hint">conf + 面板账号 + relay.db + softap.conf + 属性清单</span>
+        </div>
+        <div class="sep"></div>
+        <label class="fld"><span>从设备上的备份包恢复（上传请用 adb push）</span>
+          <select id="mrPath"></select></label>
+        <label class="fld"><span>二次确认：输入 RESTORE</span><input id="mrConfirm" placeholder="RESTORE"></label>
+        <label class="fld"><span>同时恢复数据库（默认只恢复配置）</span>
+          <select id="mrDb"><option value="0">不恢复（推荐）</option><option value="1">恢复 relay.db</option></select></label>
+        <button class="btn sm danger" onclick="doRestore(this)">恢复</button>
+        <div class="hint" style="margin-top:8px">恢复前会自动再打一份安全备份；恢复后服务会自动重启。</div>
+      </div>
+
+      <div class="card">
+        <h3>文件（/sdcard/Download）</h3>
+        <div class="row" style="margin-bottom:8px"><button class="btn sm ghost" onclick="loadMaintFiles()">刷新</button></div>
+        <div id="mfList"><div class="empty">加载中…</div></div>
+      </div>
+
+      <div class="card">
+        <h3>定时任务（crontab）</h3>
+        <label class="fld"><span>root 执行，busybox crond；保存后 30 秒内自动重载</span>
+          <textarea id="mCron" rows="6"></textarea></label>
+        <div class="row">
+          <button class="btn sm primary" onclick="saveCron(this)">保存</button>
+          <button class="btn sm ghost" onclick="loadCron()">重新读取</button>
+        </div>
+        <div class="hint" style="margin-top:8px">默认每天 04:00 落一份体检快照。可加定时重启热点、定时补收等命令。</div>
+      </div>
+
+      <div class="card">
+        <h3>恢复出厂（自定义，不删短信）</h3>
+        <label class="fld"><span>重置范围</span>
+          <select id="mrScope">
+            <option value="config">只重置配置（面板账号/端口/通道/SIM 锁/流量基线）</option>
+            <option value="wifi">只重置 WiFi（关热点 + 重建 softap.conf + 清 MAC 白名单）</option>
+            <option value="all">配置 + WiFi</option>
+          </select></label>
+        <label class="fld"><span>二次确认：输入 RESET</span><input id="mfConfirm" placeholder="RESET"></label>
+        <button class="btn sm danger" onclick="doFactoryReset(this)">恢复出厂</button>
+        <div class="hint" style="margin-top:8px">
+          原厂 <code>sysback.sh</code> 会删 <code>telephony.db</code>／<code>mmssms.db</code> 再改制式重启，这里<b>不这么做</b>：
+          只重置自己写的东西，短信库 <code>relay.db</code>、系统短信库、telephony.db 一律不动。
+          重置前会自动打一份备份，重置后服务自动重启。
+        </div>
       </div>
     </div>
   </section>
@@ -379,7 +654,8 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
 <div id="toast"></div>
 
 <script>
-var state = {status:null, sys:null, cfg:null, cfgRaw:'', view:'overview', editIdx:-1, busy:false};
+var state = {status:null, sys:null, cfg:null, cfgRaw:'', view:'overview', editIdx:-1, busy:false,
+  net:null, apns:[], apnEditId:0};
 var DEF_TPL = '{peer}\n{body}\n设备：{device}';
 
 function $(id){ return document.getElementById(id); }
@@ -441,7 +717,9 @@ function loadView(v){
   else if(v==='chs') loadConfig();
   else if(v==='sys') loadSys();
   else if(v==='wifi') loadWifi();
+  else if(v==='net') loadNet();
   else if(v==='upd') loadUpd();
+  else if(v==='maint') loadMaint();
 }
 function reloadAll(){ loadView(state.view); }
 
@@ -870,7 +1148,6 @@ function loadUpd(){
     $('updAuto').value=c.auto?'1':'0';
     $('updInterval').value=c.intervalH||24;
     $('updInsecure').value=c.insecure?'1':'0';
-    $('updWebkey').value=c.webkey||'';
     if(d.downloadDir) $('updDir').textContent=d.downloadDir;
     updModeChange();
     renderUpd(d);
@@ -930,12 +1207,413 @@ function saveUpdCfg(btn){
   if(btn) btn.disabled=true;
   var body={mode:$('updMode').value,repo:$('updRepo').value.trim(),
     manifest:$('updManifest').value.trim(),auto:$('updAuto').value==='1',
-    intervalH:Number($('updInterval').value)||24,insecure:$('updInsecure').value==='1',
-    webkey:$('updWebkey').value.trim()};
+    intervalH:Number($('updInterval').value)||24,insecure:$('updInsecure').value==='1'};
   api('POST','/api/update/config',body,function(d){
     if(btn) btn.disabled=false;
     toast(d.message||d.error||'已保存', !d.ok);
     renderUpd(d);
+  });
+}
+
+/* ---------- 维护（B0 + B1） ---------- */
+function loadMaint(){
+  api('GET','/api/maint/helper',null,function(d){
+    if(!d.ok){ $('maintHelper').innerHTML='<span class="chip err">读取失败</span>'; return; }
+    $('maintHelper').innerHTML=
+      kv('状态',d.alive?'<span class="chip ok">在线</span>':'<span class="chip err">离线</span>')+
+      kv('身份','<span class="mono">'+esc(d.uid||'未知')+'</span>')+
+      kv('地址','<span class="mono">'+esc(d.url)+'</span>');
+  });
+  api('GET','/api/maint/config',null,function(d){
+    if(!d.ok) return;
+    $('mhUrl').value=d.helperUrl||''; $('mhToken').value=d.helperToken||'';
+    $('mhHealth').value=d.healthEnabled?'1':'0'; $('mhGap').value=d.healthIntervalMin||30;
+  });
+  loadMaintFiles(); loadCron();
+}
+function saveMaintCfg(btn){
+  if(btn) btn.disabled=true;
+  api('POST','/api/maint/config',{helperUrl:$('mhUrl').value.trim(),
+    helperToken:$('mhToken').value.trim(),healthEnabled:$('mhHealth').value==='1',
+    healthIntervalMin:Number($('mhGap').value)||30},function(d){
+    if(btn) btn.disabled=false;
+    toast(d.ok?d.message:(d.message||d.error||'失败'),!d.ok);
+  });
+}
+function runCmd(btn){
+  var c=$('mcCmd').value;
+  if(!c.trim()){ toast('命令不能为空',true); return; }
+  if(btn) btn.disabled=true;
+  $('mcOut').textContent='执行中…';
+  api('POST','/api/maint/cmd',{cmd:c},function(d){
+    if(btn) btn.disabled=false;
+    $('mcOut').textContent='exit='+(d.exit===undefined?'-':d.exit)+'\n'+(d.out||d.error||d.message||'');
+    if(!d.ok) toast(d.message||d.error||'执行失败',true);
+  });
+}
+function quickCmd(c){ $('mcCmd').value=c; runCmd(null); }
+function doCheckup(btn){
+  if(btn) btn.disabled=true;
+  $('ckSummary').textContent='采集中…';
+  api('GET','/api/maint/checkup',null,function(d){
+    if(btn) btn.disabled=false;
+    if(!d.ok){ $('ckSummary').textContent=d.message||d.error||'失败'; return; }
+    $('ckSummary').innerHTML=(d.healthy?'<span class="chip ok">全部判据通过</span>':
+      '<span class="chip wait">'+(d.issues?d.issues.length:0)+' 项需关注</span>');
+    var h='', checks=d.checks||{};
+    var names={helper:'helper 通道',panel8080:'8080 面板',smsrelay:'转发进程',ril:'RIL 进程',
+      simReady:'SIM READY',ssrZero:'SSR crash 全 0',modemOnline:'modem ONLINE',
+      memOk:'内存充足',adbd5555:'网络 adb'};
+    for(var k in checks){
+      if(!checks.hasOwnProperty(k)) continue;
+      h+='<span class="chip '+(checks[k]?'ok':'err')+'">'+esc(names[k]||k)+' · '+(checks[k]?'OK':'异常')+'</span>';
+    }
+    $('ckChecks').innerHTML=h;
+    var det=kv('boot_id','<span class="mono">'+esc(d.bootId||'-')+'</span>')+
+      kv('uptime',(Number(d.uptimeSec)||0).toFixed(0)+' s')+
+      kv('SIM / 网络',esc(d.sim||'-')+' · '+esc(d.netType||'-')+' · '+esc(d.operator||'-'))+
+      kv('SSR crash',esc((d.crashes||[]).join(' / ')||'-'))+
+      kv('子系统状态',esc((d.states||[]).join(' / ')||'-'))+
+      kv('MemFree',(Number(d.memFreeKb)||0)+' kB')+
+      kv('流量累计',fmtBytes(d.trafficRx)+' / '+fmtBytes(d.trafficTx))+
+      kv('ps 行数',d.psLines||0);
+    if(d.issues&&d.issues.length){
+      det+='<div class="hint" style="margin-top:8px;color:var(--warn)">关注项：'+esc(d.issues.join('；'))+'</div>';
+    }
+    $('ckDetail').innerHTML=det;
+  });
+}
+function doLogs(){
+  var q='/api/maint/logs?kind='+encodeURIComponent($('mlKind').value)+
+    '&filter='+encodeURIComponent($('mlFilter').value)+
+    '&lines='+encodeURIComponent($('mlLines').value);
+  $('mlOut').textContent='读取中…';
+  api('GET',q,null,function(d){
+    $('mlOut').textContent=d.ok?(d.text||'（空）'):(d.message||d.error||'读取失败');
+  });
+}
+function bundleLogs(btn){
+  if(btn) btn.disabled=true;
+  api('POST','/api/maint/logs/bundle',{},function(d){
+    if(btn) btn.disabled=false;
+    toast(d.ok?d.message:(d.message||d.error||'失败'),!d.ok);
+    if(d.ok) loadMaintFiles();
+  });
+}
+function doBackup(btn){
+  if(btn) btn.disabled=true;
+  api('POST','/api/maint/backup',{},function(d){
+    if(btn) btn.disabled=false;
+    toast(d.ok?d.message:(d.message||d.error||'失败'),!d.ok);
+    if(d.ok) loadMaintFiles();
+  });
+}
+function doRestore(btn){
+  var p=$('mrPath').value;
+  if(!p){ toast('先选一个备份包',true); return; }
+  if($('mrConfirm').value.trim()!=='RESTORE'){ toast('请输入 RESTORE 二次确认',true); return; }
+  if(!confirm('确认从 '+p+' 恢复？恢复后服务会自动重启')) return;
+  if(btn) btn.disabled=true;
+  api('POST','/api/maint/restore',{path:p,confirm:'RESTORE',includeDb:$('mrDb').value==='1'},function(d){
+    if(btn) btn.disabled=false;
+    toast(d.ok?d.message:(d.message||d.error||'失败'),!d.ok);
+  });
+}
+function loadMaintFiles(){
+  api('GET','/api/maint/files',null,function(d){
+    if(!d.ok){ $('mfList').innerHTML='<div class="empty">'+esc(d.message||d.error||'读取失败')+'</div>'; return; }
+    var arr=d.files||[], h='', opts='';
+    if(!arr.length) h='<div class="empty">目录是空的</div>';
+    else{
+      h='<table><tr><th>文件</th><th>大小</th><th></th></tr>';
+      for(var i=0;i<arr.length;i++){
+        var f=arr[i];
+        h+='<tr><td class="mono">'+esc(f.name)+'</td><td class="num">'+fmtBytes(f.size)+
+          '</td><td><button class="btn sm ghost" onclick="dlFile(\''+esc(f.path)+'\')">下载</button></td></tr>';
+        if(f.name.indexOf('smsrelay-backup-')===0) opts+='<option value="'+esc(f.path)+'">'+esc(f.name)+'</option>';
+      }
+      h+='</table>';
+    }
+    $('mfList').innerHTML=h;
+    var sel=$('mrPath'), keep=sel.value; sel.innerHTML=opts||'<option value="">（没有备份包）</option>';
+    if(keep) sel.value=keep;
+  });
+}
+function dlFile(p){ window.location.href='/api/maint/file?path='+encodeURIComponent(p); }
+function loadCron(){
+  api('GET','/api/maint/cron',null,function(d){ if(d.ok) $('mCron').value=d.text||''; });
+}
+function saveCron(btn){
+  if(btn) btn.disabled=true;
+  api('POST','/api/maint/cron',{text:$('mCron').value},function(d){
+    if(btn) btn.disabled=false;
+    toast(d.ok?d.message:(d.message||d.error||'失败'),!d.ok);
+  });
+}
+function doPower(a){
+  var label=a==='reboot'?'重启':(a==='shutdown'?'关机':'进入 bootloader');
+  if(!confirm('确认'+label+'？短信转发会中断约 1 分钟')) return;
+  api('POST','/api/maint/power',{action:a,confirm:a.toUpperCase()},function(d){
+    toast(d.ok?d.message:(d.message||d.error||'失败'),!d.ok);
+  });
+}
+function doLed(a){
+  api('POST','/api/maint/led',{action:a},function(d){
+    toast(d.ok?d.message:(d.message||d.error||'失败'),!d.ok);
+  });
+}
+
+/* ---------- 网络（B2 换卡救砖） ---------- */
+function loadNet(){
+  api('GET','/api/radio',null,function(d){
+    if(!d.ok){ $('netState').innerHTML='<span class="chip err">读取失败</span> '+esc(d.message||d.error||''); return; }
+    state.net=d;
+    var modeTxt=(d.modeRaw&&d.modeRaw!=='null')?d.modeRaw:'-';
+    $('netState').innerHTML=
+      kv('制式','<span class="mono">'+esc(modeTxt)+'</span> · '+esc(d.modeLabel||''))+
+      kv('网络',esc(d.netType||'-')+' · '+esc(d.operator||'-'))+
+      kv('SIM',esc(d.simState||'-')+' · '+esc(d.simNumeric||'-'))+
+      kv('ICCID','<span class="mono">'+esc(d.iccid||'读不到')+'</span>')+
+      kv('IMSI','<span class="mono">'+esc(d.imsi||'读不到')+'</span>')+
+      kv('首选 APN',esc(d.preferredApn||'-')+' <span class="mono">'+
+        (d.preferredApnApn?'（'+esc(d.preferredApnApn)+'）':'')+'</span>')+
+      kv('默认路由','<span class="mono">'+esc((d.route||'-').split('\n')[0])+'</span>');
+    $('swData').className='sw'+(d.mobileData?' on':'');
+    $('swRoam').className='sw'+(d.roaming?' on':'');
+    if(d.mode>=0) $('netMode').value=String(d.mode);
+    var t=d.traffic||{};
+    var since=(t.sinceRx===undefined||t.sinceRx<0)?'未清零':
+      ('↑'+fmtBytes(t.sinceTx)+' ↓'+fmtBytes(t.sinceRx)+' · '+(Number(t.sinceSec)||0)+' s');
+    var ifs='';
+    var arr=t.ifaces||[];
+    for(var i=0;i<arr.length;i++){
+      if(arr[i].rx>0||arr[i].tx>0)
+        ifs+='<span class="chip">'+esc(arr[i].name)+' ↑'+fmtBytes(arr[i].tx)+' ↓'+fmtBytes(arr[i].rx)+'</span>';
+    }
+    $('netTraffic').innerHTML=
+      kv('开机以来','↑'+fmtBytes(t.tx)+' ↓'+fmtBytes(t.rx))+
+      kv('自清零',''+since)+
+      '<div style="margin-top:6px">'+(ifs||'<span class="hint">没有走过的网卡</span>')+'</div>';
+    var sl=d.simLock||{};
+    $('swSimLock').className='sw'+(sl.enabled?' on':'');
+    $('simLockAction').value=sl.action||'log';
+    $('simLockHint').innerHTML=(sl.enabled
+      ? (sl.allowed?'<span class="chip ok">当前卡在白名单</span>':'<span class="chip err">当前卡不在白名单</span>')
+      : '<span class="chip">未启用</span>')+' 当前末四位 <span class="mono">'+esc(sl.last4||'-')+'</span>';
+    var wl=sl.whitelist||[];
+    if(document.activeElement!==$('simLockList')) $('simLockList').value=wl.join('\n');
+    $('apnNumeric').textContent=d.simNumeric||'-';
+  });
+  loadApns();
+}
+function toggleData(){
+  var on=!$('swData').className.match(/ on/);
+  api('POST','/api/radio/data',{on:on},function(d){
+    toast(d.message||d.error||'完成',!d.ok);
+    loadNet();
+  });
+}
+function toggleRoam(){
+  var on=!$('swRoam').className.match(/ on/);
+  api('POST','/api/radio/roaming',{on:on},function(d){
+    toast(d.message||d.error||'完成',!d.ok);
+    loadNet();
+  });
+}
+function applyMode(reboot){
+  var m=Number($('netMode').value);
+  if(reboot && !confirm('写入制式 '+m+' 并立即重启？短信转发会中断约 1 分钟')) return;
+  if(!reboot && !confirm('写入制式 '+m+'？4.4 要重启才生效，现在写进去不影响正在跑的网络')) return;
+  api('POST','/api/radio/mode',{mode:m,reboot:!!reboot},function(d){
+    toast(d.message||d.error||'完成',!d.ok);
+    if(!reboot) loadNet();
+  });
+}
+function loadApns(){
+  api('GET','/api/radio/apns',null,function(d){
+    if(!d.ok){ $('apnList').innerHTML='<div class="empty">'+esc(d.message||d.error||'读取失败')+'</div>'; return; }
+    state.apns=d.list||[];
+    $('apnHint').textContent=d.message||'';
+    if(!state.apns.length){ $('apnList').innerHTML='<div class="empty">这个运营商下没有 APN</div>'; return; }
+    var h='<table><tr><th>名称</th><th>APN</th><th>类型</th><th>状态</th><th>操作</th></tr>';
+    for(var i=0;i<state.apns.length;i++){
+      var a=state.apns[i], pref=(d.preferredApnId&&a.id===d.preferredApnId);
+      h+='<tr><td>'+esc(a.name)+'</td><td class="mono">'+esc(a.apn)+'</td>'+
+        '<td class="mono">'+esc(a.type||'-')+'</td>'+
+        '<td>'+(pref?'<span class="chip ok">首选</span>':(a.enabled?'':'<span class="chip">停用</span>'))+'</td>'+
+        '<td>'+(pref?'':'<button class="btn sm ghost" onclick="preferApn('+a.id+')">切为首选</button> ')+
+        '<button class="btn sm ghost" onclick="editApn('+a.id+')">编辑</button> '+
+        '<button class="btn sm ghost" onclick="delApn('+a.id+')">删</button></td></tr>';
+    }
+    $('apnList').innerHTML=h+'</table>';
+  });
+}
+function newApn(){
+  state.apnEditId=0;
+  $('apName').value=''; $('apApn').value=''; $('apType').value='default,supl';
+  $('apUser').value=''; $('apPass').value=''; $('apProto').value='IPV4V6';
+  $('apEdit').textContent='当前是新增模式';
+}
+function editApn(id){
+  var arr=state.apns||[];
+  for(var i=0;i<arr.length;i++){
+    if(arr[i].id!==id) continue;
+    var a=arr[i];
+    state.apnEditId=id;
+    $('apName').value=a.name||''; $('apApn').value=a.apn||''; $('apType').value=a.type||'';
+    $('apUser').value=a.user||''; $('apPass').value=a.password||''; $('apProto').value=a.protocol||'IPV4V6';
+    $('apEdit').textContent='正在修改 #'+id+'（点「新增 APN」可切回新增）';
+    return;
+  }
+}
+function saveApn(){
+  var body={id:state.apnEditId||0,name:$('apName').value.trim(),apn:$('apApn').value.trim(),
+    type:$('apType').value.trim()||'default,supl',user:$('apUser').value.trim(),
+    password:$('apPass').value.trim(),protocol:$('apProto').value.trim()||'IPV4V6'};
+  if(!body.name||!body.apn){ toast('名称和 APN 都要填',true); return; }
+  api('POST','/api/radio/apn/save',body,function(d){
+    toast(d.message||d.error||'完成',!d.ok);
+    if(d.ok){ state.apnEditId=0; loadApns(); }
+  });
+}
+function delApn(id){
+  if(!confirm('删除 APN #'+id+' ？不可恢复')) return;
+  api('POST','/api/radio/apn/delete',{id:id},function(d){
+    toast(d.message||d.error||'完成',!d.ok);
+    loadApns();
+  });
+}
+function preferApn(id){
+  if(!confirm('把 APN #'+id+' 设为首选，并重连数据连接？会短暂断网')) return;
+  api('POST','/api/radio/apn/prefer',{id:id,reconnect:true},function(d){
+    toast(d.message||d.error||'完成',!d.ok);
+    setTimeout(loadNet,3000);
+  });
+}
+function clearTraffic(btn){
+  if(!confirm('把流量计数基线设为当前值？（不影响系统统计）')) return;
+  if(btn) btn.disabled=true;
+  api('POST','/api/radio/traffic/clear',{},function(d){
+    if(btn) btn.disabled=false;
+    toast(d.message||d.error||'完成',!d.ok);
+    loadNet();
+  });
+}
+function toggleSimLock(){
+  var on=!$('swSimLock').className.match(/ on/);
+  $('swSimLock').className='sw'+(on?' on':'');
+  saveSimLock(null);
+}
+function saveSimLock(btn){
+  var body={enabled:$('swSimLock').className.match(/ on/)?true:false,
+    action:$('simLockAction').value,list:$('simLockList').value};
+  if(body.enabled && !body.list.trim()){ toast('白名单是空的，开了锁会把所有卡都判成不合规',true); return; }
+  if(btn) btn.disabled=true;
+  api('POST','/api/radio/simlock',body,function(d){
+    if(btn) btn.disabled=false;
+    toast(d.message||d.error||'完成',!d.ok);
+    loadNet();
+  });
+}
+function addCurrentIccid(){
+  var n=state.net||{}, ic=n.iccid||'';
+  if(!ic){ toast('读不到 ICCID',true); return; }
+  var cur=$('simLockList').value.trim();
+  if(cur.indexOf(ic)>=0){ toast('已经在白名单里了'); return; }
+  $('simLockList').value=(cur?cur+'\n':'')+ic;
+  toast('已加入，点「保存」生效');
+}
+function ndKindChange(){
+  var k=$('ndKind').value;
+  var need=(k==='ping'||k==='trace'||k==='dns'||k==='http');
+  $('ndTarget').disabled=!need;
+  $('ndHint').textContent = k==='tcpdump'
+    ? '抓包最多 20 秒、200 个包，落盘到 /sdcard/Download，去「维护 → 文件」下载'
+    : (need?'填域名或 IP'+(k==='http'?'（要带 http://）':''):'这个诊断不需要目标');
+}
+function runDiag(btn){
+  var body={kind:$('ndKind').value,target:$('ndTarget').value.trim(),
+    count:Number($('ndCount').value)||4};
+  if(btn) btn.disabled=true;
+  $('ndOut').textContent='执行中…';
+  api('POST','/api/netdiag',body,function(d){
+    if(btn) btn.disabled=false;
+    var txt=d.text||d.message||d.error||'（空）';
+    if(d.path) txt+='\n\n文件：'+d.path+'（'+(d.size||0)+' 字节）';
+    if(body.kind==='attach'){
+      txt=txt.replace(/^##(\w+)$/gm,'—— $1 ——');
+    }
+    $('ndOut').textContent=txt;
+    if(!d.ok) toast(d.message||d.error||'执行失败',true);
+  });
+}
+
+/* ---------- 无线高级 ---------- */
+function loadWifiAdv(){
+  $('wadvInfo').textContent='读取中…';
+  api('GET','/api/wifi/adv',null,function(d){
+    if(!d.ok){ $('wadvInfo').innerHTML='<span class="chip err">读取失败</span> '+esc(d.message||d.error||''); return; }
+    $('wadvHint').innerHTML=d.hostapdOk?'<span class="chip ok">hostapd 在线</span>'
+      :'<span class="chip wait">热点未开</span> '+esc(d.hint||'');
+    var c=d.config||{};
+    $('wadvInfo').innerHTML=
+      kv('无线模式',esc(d.conMode==='1'?'AP（热点）':d.conMode==='0'?'STA（连路由）':d.conMode||'-'))+
+      kv('热点 BSSID','<span class="mono">'+esc(c.bssid||'-')+'</span>')+
+      kv('当前 SSID',esc(c.ssid||'-'))+
+      kv('加密','<span class="mono">'+esc(c.keyMgmt||'-')+'</span>')+
+      kv('驱动最大关联',esc(d.maxAssoc||'-'))+
+      kv('自动信道',esc(d.autoChannel==='1'?'开启':d.autoChannel==='0'?'关闭':d.autoChannel||'-'));
+    if(d.maxAssoc) $('wadvMax').value=d.maxAssoc;
+    var arr=d.clients||[], h='';
+    if(!arr.length) h='<div class="hint">当前没有客户端关联（热点没开时也读不到）</div>';
+    else{
+      h='<table><tr><th>MAC</th><th>信号</th><th>aid</th><th></th></tr>';
+      for(var i=0;i<arr.length;i++){
+        var a=arr[i];
+        h+='<tr><td class="mono">'+esc(a.mac)+'</td><td class="mono">'+esc(a.rssi||'-')+
+          '</td><td class="mono">'+esc(a.aid||'-')+'</td>'+
+          '<td><button class="btn sm ghost" onclick="kickMac(\''+esc(a.mac)+'\')">踢掉</button></td></tr>';
+      }
+      h+='</table>';
+    }
+    $('wadvClients').innerHTML=h;
+  });
+}
+function kickMac(mac){ $('wadvKick').value=mac; wadv('kick','wadvKick'); }
+function wadv(action,inputId){
+  var arg=inputId?$(inputId).value.trim():'';
+  if(action==='kick'&&!confirm('踢掉 '+arg+' ？它会重新连一次热点')) return;
+  api('POST','/api/wifi/adv',{action:action,arg:arg},function(d){
+    toast(d.message||d.error||'完成',!d.ok);
+    if(d.message){ $('wadvOut').style.display='block'; $('wadvOut').textContent=d.message+(d.detail?'\n'+d.detail:''); }
+    loadWifiAdv();
+  });
+}
+function wadvHideApply(){
+  var v=$('wadvHide').value;
+  if(v==='0'&&!confirm('隐藏 SSID 后，手机要手动输入热点名才能连，确认？')) return;
+  api('POST','/api/wifi/adv',{action:'hide',arg:v},function(d){
+    toast(d.message||d.error||'完成',!d.ok);
+    if(d.message){ $('wadvOut').style.display='block'; $('wadvOut').textContent=d.message+(d.detail?'\n'+d.detail:''); }
+  });
+}
+function wadvAuto(on){
+  api('POST','/api/wifi/adv',{action:'autoch',arg:String(on)},function(d){
+    toast(d.message||d.error||'完成',!d.ok);
+    loadWifiAdv();
+  });
+}
+
+/* ---------- 恢复出厂 ---------- */
+function doFactoryReset(btn){
+  var scope=$('mrScope').value;
+  if($('mfConfirm').value.trim()!=='RESET'){ toast('请输入 RESET 二次确认',true); return; }
+  if(!confirm('确认恢复出厂（'+scope+'）？面板账号会回到 admin/admin，服务会重启；短信不会丢')) return;
+  if(btn) btn.disabled=true;
+  api('POST','/api/maint/reset',{scope:scope,confirm:'RESET'},function(d){
+    if(btn) btn.disabled=false;
+    toast(d.message||d.error||'完成',!d.ok);
+    if(d.ok) $('mfConfirm').value='';
   });
 }
 
@@ -946,6 +1624,7 @@ setInterval(function(){
   if(state.view==='overview') loadOverview();
   else if(state.view==='msgs') loadMsgs();
   else if(state.view==='wifi') loadWifi();
+  else if(state.view==='net') loadNet();
 }, 6000);
 loadOutbox();
 </script>

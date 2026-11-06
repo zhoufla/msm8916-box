@@ -1,0 +1,54 @@
+#!/system/bin/sh
+# relay-helper · 通用 root 命令通道
+#
+# 请求：POST /cgi-bin/cmd?t=<token>
+#   body = 要执行的 shell 命令（纯文本，最大 64KB）
+# 响应：命令的 stdout+stderr（最大 256KB），末行固定 "[exit=N]"
+#
+# 只监听 127.0.0.1:8899，由 8080 面板代发；token 与面板配置里的
+# helper.token 一致。httpd 是 init(root) 拉起的，所以这里天然 uid=0，
+# 绕开固件 /system/xbin/su 只放行 uid 0/2000 的限制。
+#
+# 注意：busybox httpd 的 CGI 头必须以纯 \n 结尾（用 \r\n 会把正文当头转发），
+# 且这台 4.4 的 toolbox 没有 printf/head 等命令，一律用 busybox applet。
+
+BB=/system/xbin/busybox
+ROOT=/system/etc/relay-helper
+TMP=/data/local/tmp/relay-helper
+MAX_OUT=262144
+TIMEOUT=90
+
+echo "Content-type: text/plain; charset=utf-8"
+echo ""
+
+want=$(cat "$ROOT/token" 2>/dev/null)
+got=${QUERY_STRING#t=}
+if [ -z "$want" ] || [ "$got" != "$want" ] || [ "${REQUEST_METHOD}" != "POST" ]; then
+    echo "[exit=77] bad token or method"
+    exit 0
+fi
+
+n=${CONTENT_LENGTH:-0}
+case "$n" in
+    ''|*[!0-9]*) n=0 ;;
+esac
+if [ "$n" -le 0 ] || [ "$n" -gt 65536 ]; then
+    echo "[exit=2] bad CONTENT_LENGTH ($n)"
+    exit 0
+fi
+
+mkdir -p "$TMP" 2>/dev/null
+cmd=$($BB head -c "$n")
+if [ -z "$cmd" ]; then
+    echo "[exit=2] empty command"
+    exit 0
+fi
+
+out="$TMP/out.$$"
+$BB timeout "$TIMEOUT" /system/bin/sh -c "$cmd" > "$out" 2>&1
+rc=$?
+$BB head -c "$MAX_OUT" "$out" 2>/dev/null
+echo ""
+echo "[exit=$rc]"
+rm -f "$out"
+exit 0
