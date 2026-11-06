@@ -333,6 +333,7 @@ function api(method, path, body, cb){
 }
 function fmtBytes(n){
   n=Number(n)||0;
+  if(n<0) return '—';
   if(n<1024) return n+' B';
   if(n<1048576) return (n/1024).toFixed(1)+' KB';
   if(n<1073741824) return (n/1048576).toFixed(1)+' MB';
@@ -607,7 +608,17 @@ function saveConfig(){
   for(var i=0;i<cfg.channels.length;i++) delete cfg.channels[i].__dirty;
   api('POST','/api/config',cfg,function(d){
     toast(d.ok?d.message:(d.error||'保存失败'), !d.ok);
-    if(d.ok&&d.restarted){ setTimeout(function(){ location.reload(); },1600); return; }
+    if(d.ok&&d.restarted){
+      var cur=location.port||'80', np=String(d.port||'');
+      if(np&&np!==cur){
+        // 换了端口，旧地址已经不通，直接给出新链接
+        var host=location.hostname;
+        $('cfgFile').innerHTML='面板已切到端口 '+np+'：<a href="http://'+host+':'+np+'/">http://'+host+':'+np+'/</a>（用新地址打开）';
+      }else{
+        setTimeout(function(){ location.reload(); },1600);
+      }
+      return;
+    }
     if(d.ok) loadConfig();
   });
 }
