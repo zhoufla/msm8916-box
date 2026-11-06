@@ -85,6 +85,15 @@ public final class Radio {
             o.put("operator", first(sec.get("OPER")));
             o.put("simNumeric", first(sec.get("NUMSIM")));
             o.put("simState", first(sec.get("SIM")));
+            // 双槽状态数组：gsm.sim.state 逗号分隔（本机 dsds = "READY,ABSENT"）。
+            // 空/单值时保证至少有一项，前端按槽序展示。
+            JSONArray slots = new JSONArray();
+            for (String s : first(sec.get("SIM")).split(",")) {
+                String v = s.trim();
+                if (v.length() > 0) slots.put(v);
+            }
+            if (slots.length() == 0) slots.put("未知");
+            o.put("simSlots", slots);
             o.put("route", join(sec.get("ROUTE")).trim());
             o.put("iccid", iccid(ctx));
             o.put("iccidRaw", iccidRaw(ctx));
