@@ -256,7 +256,7 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
   <section class="view" id="v-wifi">
     <div class="grid g2">
       <div class="card">
-        <h3>热点</h3>
+        <h3>热点（AP）</h3>
         <div class="row" style="margin-bottom:10px">
           <div class="sw" id="swAp" onclick="toggleAp()"><i></i></div>
           <span class="hint" id="apHint">读取中…</span>
@@ -268,9 +268,22 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
         <button class="btn primary" onclick="setAp()">保存并开热点</button>
       </div>
       <div class="card">
+        <h3>无线网卡 / station</h3>
+        <div class="row" style="margin-bottom:10px">
+          <div class="sw" id="swSta" onclick="toggleSta()"><i></i></div>
+          <span class="hint" id="staHint">读取中…</span>
+        </div>
+        <div id="staInfo"></div>
+        <div class="sep"></div>
+        <div id="ifList"></div>
+      </div>
+      <div class="card">
         <h3>已连接客户端</h3>
         <div id="apClients"><div class="empty">加载中…</div></div>
-        <div class="sep"></div>
+        <div class="hint" style="margin-top:8px">客户端列表来自 ARP 表，只统计无线网卡下的地址</div>
+      </div>
+      <div class="card">
+        <h3>周边 WiFi</h3>
         <button class="btn sm" onclick="scanWifi()">扫描周边 WiFi</button>
         <div id="scanList" style="margin-top:9px"></div>
       </div>
@@ -637,8 +650,13 @@ function loadSys(){
     $('sysOs').innerHTML=
       kv('Android',esc(d.android)+'（API '+d.sdk+'）')+kv('版本号',esc(d.build))+
       kv('运行时长',esc(d.uptime))+kv('运营商',esc(d.operator||'-'))+
-      kv('网络',esc(d.netType||'-'))+kv('SIM',esc(d.sim||'-'))+
-      kv('信号',(s.dbm?s.dbm+' dBm / ASU '+s.asu:'未知'))+
+      kv('网络',esc(d.netType||'-')+(d.signal&&d.signal.tech?' · '+esc(d.signal.tech):''))+
+      kv('SIM',esc(d.sim||'-')+(d.simOperator?' · '+esc(d.simOperator):''))+
+      kv('信号',(s.dbm?s.dbm+' dBm / ASU '+s.asu+' · '+esc(s.text||''):esc(s.text||'未知')))+
+      (s.rsrp?kv('LTE RSRP',s.rsrp+' dBm'):'')+
+      (s.rsrq?kv('LTE RSRQ',s.rsrq+' dB'):'')+
+      (s.rssnr?kv('LTE SNR',(s.rssnr/10).toFixed(1)+' dB'):'')+
+      kv('WiFi 信号',(s.wifiRssi!==undefined?s.wifiRssi+' dBm':'—'))+
       kv('USB 模式',esc(d.adbd||'-'));
     var st='';
     for(var i=0;i<(d.storage||[]).length;i++){
@@ -666,32 +684,75 @@ function loadSys(){
 function loadWifi(){
   api('GET','/api/wifi',null,function(d){
     if(!d.ok){ toast(d.error||'读取失败', true); return; }
-    var s=d.state||{}, on=(s.ap===true);
-    $('swAp').className='sw'+(on?' on':'');
-    $('apHint').textContent=(s.ap===null?'状态不可读（ROM 限制）':on?'热点已开启':'热点已关闭')+
-      (s.wifiOn?' · station 模式也开着':'');
+    var s=d.state||{}, ap=(s.ap===true), sta=(s.wifiOn===true), st=s.station||{};
+
+    $('swAp').className='sw'+(ap?' on':'');
+    $('apHint').textContent=(s.ap===null?'状态不可读（ROM 限制）':ap?'热点已开启':'热点已关闭');
     $('apInfo').innerHTML=
       kv('SSID',esc(s.ssid||'-'))+kv('加密',s.secured?'WPA2':'开放/未知')+
-      kv('本机地址',esc(s.clientIp||'-'))+kv('客户端',(s.clients||[]).length+' 台');
+      kv('热点地址',esc(s.apIp||'-'))+kv('客户端',(s.clients||[]).length+' 台');
+
+    $('swSta').className='sw'+(sta?' on':'');
+    $('staHint').innerHTML=esc(sta?'station 已开启':(s.driver?'WiFi 已关闭（驱动已加载）':'WiFi 已关闭（wlan 模块未加载）'))+
+      (s.hint?'<br>'+esc(s.hint):'');
+    var si='';
+    if(st.connected){
+      si+=kv('已连网络',esc(st.ssid||'-'))+kv('信号',(st.rssi)+' dBm · '+bar(st.level,5));
+    }else{
+      si+=kv('已连网络',sta?'未连接':'—');
+    }
+    si+=kv('MAC',esc(st.mac||'-'))+kv('IP',esc(st.ip||'-'));
+    if(st.linkSpeed) si+=kv('速率',st.linkSpeed+' Mbps');
+    if(st.bssid) si+=kv('BSSID',esc(st.bssid));
+    $('staInfo').innerHTML=si;
+
+    var ifs=s.ifaces||[], it='';
+    if(ifs.length){
+      it='<table><tr><th>网卡</th><th>地址</th><th>MAC</th></tr>';
+      for(var i=0;i<ifs.length;i++){
+        it+='<tr><td class="mono">'+esc(ifs[i].name)+(ifs[i].up?'':' <span class="chip">down</span>')+
+          '</td><td class="mono">'+esc(ifs[i].ip||'-')+'</td><td class="mono">'+esc(ifs[i].mac||'-')+'</td></tr>';
+      }
+      it+='</table>';
+    }else{
+      it='<div class="empty">当前没有无线网卡（WiFi 与热点都关着时驱动不加载）</div>';
+    }
+    $('ifList').innerHTML=it;
+
     if(s.ssid) $('apSsid').value=s.ssid;
-    var cl='<table><tr><th>IP</th><th>MAC</th></tr>', arr=s.clients||[];
-    for(var i=0;i<arr.length;i++) cl+='<tr><td class="mono">'+esc(arr[i].ip)+'</td><td class="mono">'+esc(arr[i].mac)+'</td></tr>';
+    var cl='<table><tr><th>IP</th><th>MAC</th><th>网卡</th></tr>', arr=s.clients||[];
+    for(var j=0;j<arr.length;j++)
+      cl+='<tr><td class="mono">'+esc(arr[j].ip)+'</td><td class="mono">'+esc(arr[j].mac)+
+        '</td><td class="mono">'+esc(arr[j].iface||'')+'</td></tr>';
     $('apClients').innerHTML=arr.length?(cl+'</table>'):'<div class="empty">暂无客户端（ARP 表为空）</div>';
   });
+}
+function bar(level,max){
+  var n=Number(level)||0, m=Number(max)||5, s='';
+  for(var i=0;i<m;i++) s+='<i style="display:inline-block;width:4px;height:'+(4+i*3)+'px;margin-right:2px;border-radius:1px;background:'+
+    (i<n?'var(--accent,#3b82f6)':'var(--line,#ddd)')+'"></i>';
+  return s;
 }
 function toggleAp(){
   var on=$('swAp').className.indexOf('on')>=0;
   $('apHint').textContent='正在'+(on?'关闭':'开启')+'…';
-  api('POST','/api/wifi',{action:on?'off':'on'},function(d){
-    toast(d.ok?d.message:(d.error||'失败'), !d.ok); loadWifi();
+  api('POST','/api/wifi',{action:on?'ap_off':'ap_on'},function(d){
+    toast(d.ok?d.message:(d.error||'失败'), !d.ok); setTimeout(loadWifi,1200);
   });
 }
 function setAp(){
   var ssid=$('apSsid').value.trim(), pass=$('apPass').value;
   if(!ssid){ toast('SSID 不能为空', true); return; }
   if(pass&&pass.length<8){ toast('WPA2 密码至少 8 位', true); return; }
-  api('POST','/api/wifi',{action:'set',ssid:ssid,pass:pass},function(d){
-    toast(d.ok?d.message:(d.error||'失败'), !d.ok); loadWifi();
+  api('POST','/api/wifi',{action:'ap_set',ssid:ssid,pass:pass},function(d){
+    toast(d.ok?d.message:(d.error||'失败'), !d.ok); setTimeout(loadWifi,1500);
+  });
+}
+function toggleSta(){
+  var on=$('swSta').className.indexOf('on')>=0;
+  $('staHint').textContent='正在'+(on?'关闭':'开启')+'…';
+  api('POST','/api/wifi',{action:on?'sta_off':'sta_on'},function(d){
+    toast(d.ok?d.message:(d.error||'失败'), !d.ok); setTimeout(loadWifi,1500);
   });
 }
 function scanWifi(){
@@ -699,13 +760,14 @@ function scanWifi(){
   api('GET','/api/wifi/scan',null,function(d){
     if(!d.ok){ $('scanList').innerHTML='<div class="hint">'+esc(d.error||'扫描失败')+'</div>'; return; }
     var arr=d.list||[];
-    if(!arr.length){ $('scanList').innerHTML='<div class="hint">没扫到（热点开启时无法扫频，需先关热点）</div>'; return; }
+    if(!arr.length){ $('scanList').innerHTML='<div class="hint">'+esc(d.hint||'没扫到任何网络')+'</div>'; return; }
     var h='<table><tr><th>SSID</th><th>信号</th><th>信道</th></tr>';
     for(var i=0;i<arr.length;i++){
       var r=arr[i];
-      h+='<tr><td>'+esc(r.ssid||'(隐藏)')+(r.secured?' 🔒':'')+'</td><td class="num">'+r.level+' dBm</td><td class="num">'+r.channel+'</td></tr>';
+      h+='<tr><td>'+esc(r.ssid||'(隐藏)')+(r.secured?' 🔒':'')+'</td><td class="num">'+r.level+
+        ' dBm</td><td class="num">'+r.channel+'</td></tr>';
     }
-    $('scanList').innerHTML=h+'</table>';
+    $('scanList').innerHTML=h+'</table>'+(d.hint?'<div class="hint" style="margin-top:6px">'+esc(d.hint)+'</div>':'');
   });
 }
 

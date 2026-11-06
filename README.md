@@ -19,7 +19,8 @@
 | `Inbox` | 补收：把系统收件箱里漏转发的短信补进队列 |
 | `AppConfig` | 配置优先级：`/sdcard/smsrelay.conf`（JSON）> SharedPreferences > 内置示例 |
 | `WebPanel` / `Http` | 内嵌 HTTP/1.1 服务（纯 JDK，无第三方库）+ JSON API + 静态页面，Basic 鉴权 |
-| `SysInfo` | 型号/基带/信号/电量/存储/流量/uptime/网卡（PhoneStateListener 缓存信号，不额外耗电） |
+| `SysInfo` | 型号/基带/信号（rsrp+rsrq+rssnr+制式，PhoneStateListener 缓存不额外耗电）/电量/存储/流量/uptime/网卡 |
+| `WifiCtl` | 热点启停与 SSID/密码、station 开关、驱动与硬件区分、网卡 MAC/IP、ARP 客户端、扫频 |
 | `WifiCtl` | 反射调用 hidden API 启停热点、改 SSID/密码；`/proc/net/arp` 读客户端；扫频 |
 | `Logs` | 内存环形日志，面板「最近日志」直读 |
 | `TestReceiver` | 调试通道（见下） |
@@ -62,7 +63,8 @@
 
 六个页面：**概览**（队列/设备/信号/最近日志）· **短信**（收信 + 每通道投递状态 + 重发 +
 补收 + 注入测试）· **发送**（发短信 + 发送记录）· **通道**（通道增删改、设备名、面板账号）·
-**系统**（硬件/系统/存储/流量/网卡）· **WiFi**（热点开关、SSID 密码、客户端、扫频）。
+**系统**（硬件/系统/存储/流量/网卡）· **WiFi**（热点开关与 SSID/密码、station 开关、
+无线网卡与 MAC/IP、客户端、扫频）。
 
 页面是单文件、无外链 CDN，设备没网也能打开；XHR + ES5，老浏览器也能用。
 
@@ -80,10 +82,30 @@
 | GET | `/api/outbox?limit=20` | 发件记录 |
 | GET | `/api/config` | 当前生效配置 + 来源文件 + 面板状态 |
 | POST | `/api/config` | 保存配置（body 为完整配置 JSON） |
-| GET | `/api/wifi` | 热点状态 + 客户端列表 |
-| POST | `/api/wifi` | `{"action":"on\|off\|set","ssid","pass"}` |
-| GET | `/api/wifi/scan` | 扫频（station 模式开启时才有结果） |
+| GET | `/api/wifi` | 热点 + station + 网卡 + 客户端 + `hint` |
+| POST | `/api/wifi` | `{"action":"ap_on\|ap_off\|ap_set\|sta_on\|sta_off","ssid","pass"}`（`on/off/set` 兼容旧面板），回 `{ok,message,state}` |
+| GET | `/api/wifi/scan` | 扫频，回 `{ok,list,hint}`（station 开启时才有结果） |
 | GET | `/api/logs?limit=80` | 内存日志 |
+
+`/api/wifi` 的 `state` 字段（真机实测值）：
+
+```json
+{
+  "ap": true, "wifiOn": false, "driver": true, "hardware": true,
+  "ssid": "ufi_56423", "secured": true, "apIp": "192.168.0.1",
+  "ifaces": [{"name":"wlan0","mac":"08:97:58:1a:af:da","ip":"192.168.0.1","up":true}],
+  "station": {"connected": false, "ssid": "", "rssi": 0, "level": 0, "linkSpeed": 0,
+              "mac": "08:97:58:1a:af:da", "ip": ""},
+  "clients": [{"ip":"192.168.0.50","mac":"aa:bb:cc:dd:ee:ff","iface":"wlan0"}],
+  "hint": "热点已开启（单射频，此时无法扫频；要扫描请先关热点）"
+}
+```
+
+- `driver` = wlan 模块**当前已加载**；`hardware` = 机器上**有** WiFi（wlan.ko 存在）。
+  WiFi 全关时 `driver=false`、`ifaces=[]` 是正常的（4.4 按需 insmod/rmmod）。
+- `apIp` 是热点地址（本机 `192.168.0.1/24`），`station.ip` 只放连路由器拿到的地址，
+  两者不混用，避免热点模式下误以为「已连网络」。
+- `hint` 说明当前为什么干不了活（模块没加载 / 热点占着射频 / station 没开）。
 
 curl 示例：
 
@@ -144,17 +166,31 @@ sh tools/smoke-test.sh 192.168.42.129:8080 admin:admin 10086
 | 配置写回 | POST 原样回写 → `/sdcard/smsrelay.conf` 留下注释头 + 合法 JSON，中文与 `\n` 无损 |
 | 配置校验 | `maxTries=999` / `type=ftp` / 非 http url 三种非法输入均被拒，且不污染已存配置 |
 | 面板换端口 | 8080→8081 返回 `restarted:true`，8081 可访问、8080 关闭；改回 8080 同样生效 |
-| 信号读数 | LTE 下 `dbm=-96 / level=2 / asu=43`，与 `dumpsys telephony.registry` 的 `rsrp=-97` 一致 |
-| WiFi | 本机无 `wlan0`，`/api/wifi` 明确给出 `hint`，客户端列表不再把 RNDIS 对端算进去 |
+| 信号读数 | LTE 下 `rsrp=-97 / rsrq=-14 / level=2 / asu=43 / tech=gsm\|lte`，与 `dumpsys telephony.registry` 的 `SignalStrength: 99 0 -120 -160 -120 -1 -1 25 -97 -14 2 ... gsm\|lte` 逐字段对得上 |
+| WiFi 硬件 | 有 `wlan0`（MAC `08:97:58:1a:af:da`）；WiFi 关闭时模块不加载、网卡消失，属 4.4 按需 insmod 的正常行为 |
+| 热点启停 | `ap_on` → `ap=true`，wlan0 拿到 `192.168.0.1/24`，hostapd 日志 `Using interface wlan0 ... ssid "ufi_56423"`；`ap_off` 干净关闭 |
+| 热点改配置 | `ap_set` 改 SSID/密码后 softap.conf 与 hostapd.conf 同步更新，hostapd 以新 SSID 重启；测完已恢复原值 |
+| 热点客户端 | 按网卡过滤而非网段（热点是 `192.168.0.x`，RNDIS 是 `192.168.42.x`），ARP 里只保留 `0x2` 已解析条目、排除热点自身地址 |
+| 扫频 | station 开启时扫到 4 个 AP（含中文 SSID）；热点开着时返回明确 `hint` 而不是空列表 |
 
-真机暴露并已修掉的两个问题：
+真机暴露并已修掉的问题：
 
 1. **信号恒为「未知」**：4.4 上 `SignalStrength.getGsmSignalStrength()` 在纯 LTE 下返回 99，
-   原实现据此判成无信号。改为解析 `SignalStrength.toString()` 的字段，优先取 LTE `rsrp`。
+   原实现据此判成无信号。改为解析 `SignalStrength.toString()` 的字段（含末尾的 `gsm|lte` 制式标记），
+   优先取 LTE `rsrp`，并额外暴露 `rsrp/rsrq/rssnr/lteSs/tech`。
 2. **补收会重复转发 + `pending` 卡住**：去重键原来是 `MD5(ts|peer|body)`，广播的短信中心时间戳
    与收件箱 `date` 差 2 秒就会被当成新短信；同时历史遗留的孤儿 `dl` 记录（`ev_id` 指向已不存在的事件）
    被 `due()` 的 INNER JOIN 跳过，永远停在 `status=0`。现在改为「号码+内容+90s 窗口」判重，
    并在服务启动时用 `purgeOrphans()` 清掉孤儿投递。
+3. **热点开关根本没通过**：反射 `m("setWifiApEnabled")` 没带参数类型，取到的方法签名是空参，
+   一调就是 `NoSuchMethodException`（v1.1 里就已存在，只是没有真机验证过）。
+   必须 `getMethod("setWifiApEnabled", WifiConfiguration.class, boolean.class)`。
+4. **热点客户端列表永远是空**：原来按写死的 `192.168.42.` 网段过滤，而这台机器的热点网段是
+   `192.168.0.0/24`。改为按网卡过滤（`wlan*/ap*/p2p*`，排除 `rndis*/rmnet*/usb*`）、
+   排除热点自身地址、只保留 ARP `0x2` 已解析条目。
+5. **热点开着时改不了 SSID**：框架会忽略对已开启热点的重复 `enable`，必须先关一次再带新配置开。
+6. **station 与热点的地址混用**：`station.ip` 原来会用 wlan0 的地址兜底，热点模式下就显示成
+   `192.168.0.1`，看起来像「连着 192.168.0.1」。现在 `station.ip` 只放连路由器拿到的地址。
 
 ## 调试通道（无屏利器）
 
