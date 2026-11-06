@@ -50,11 +50,16 @@ public final class Radio {
 
     // ---------- #13/#14/#15 状态 ----------
 
+    /**
+     * ⚠ 性能：/system/bin/settings 每次调用都要起一个 dalvik VM（实测 ~0.9s），
+     * 3 个值分开查就是 2.7s，把 /api/radio 拖到 4.6s（smoke 的 8s 超时边缘）。
+     * 改成一次 content query 读 settings/global 的 4 个键（一个 VM，~1s），
+     * 输出格式 "Row: N name=xxx, value=yyy"（value 可能含逗号，按 ", value=" 切第一刀）。
+     */
     private static final String STATE_CMD =
-            "echo '##MODE'; settings get global preferred_network_mode; " +
-            "echo '##MODE1'; settings get global preferred_network_mode1; " +
-            "echo '##ROAM'; settings get global data_roaming; " +
-            "echo '##MOBILE'; settings get global mobile_data; " +
+            "echo '##SETTINGS'; content query --uri content://settings/global" +
+            " --projection name:value --where \"name in ('preferred_network_mode'," +
+            "'preferred_network_mode1','data_roaming','mobile_data')\" 2>/dev/null; " +
             "echo '##NETTYPE'; getprop gsm.network.type; " +
             "echo '##OPER'; getprop gsm.operator.alpha; " +
             "echo '##NUMSIM'; getprop gsm.sim.operator.numeric; " +
@@ -63,6 +68,19 @@ public final class Radio {
             "echo '##ROUTE'; ip route 2>/dev/null; " +
             "echo '##UPTIME'; cat /proc/uptime";
 
+    /** "Row: N name=x, value=y" → {x=y}；value 里的逗号原样保留。 */
+    private static java.util.Map<String, String> settingsMap(List<String> lines) {
+        java.util.Map<String, String> m = new java.util.HashMap<String, String>();
+        if (lines == null) return m;
+        for (String line : lines) {
+            int at = line.indexOf("name=");
+            int vs = line.indexOf(", value=");
+            if (at < 0 || vs < 0) continue;
+            m.put(line.substring(at + 5, vs), line.substring(vs + 8));
+        }
+        return m;
+    }
+
     /** 面板「网络」页一次拿全：制式 / 数据 / 漫游 / SIM / 首选 APN / 默认路由。 */
     public static JSONObject state(Context ctx) {
         JSONObject o = new JSONObject();
@@ -70,17 +88,18 @@ public final class Radio {
             Root.Result r = Root.exec(ctx, STATE_CMD);
             if (!r.ok() && r.error.length() > 0) throw new IllegalStateException(r.error);
             java.util.Map<String, List<String>> sec = sections(r.out);
+            java.util.Map<String, String> set = settingsMap(sec.get("SETTINGS"));
 
-            String mode = first(sec.get("MODE"));
-            String mode1 = first(sec.get("MODE1"));
+            String mode = nvl(set.get("preferred_network_mode"));
+            String mode1 = nvl(set.get("preferred_network_mode1"));
             o.put("ok", true);
             o.put("modeRaw", mode);
             o.put("mode", intIn(mode));
             o.put("modeSuffix", suffixOf(mode));
             o.put("mode1", "null".equals(mode1) ? "" : mode1);
             o.put("mode1Value", intIn(mode1));
-            o.put("roaming", "1".equals(first(sec.get("ROAM"))));
-            o.put("mobileData", "1".equals(first(sec.get("MOBILE"))));
+            o.put("roaming", "1".equals(set.get("data_roaming")));
+            o.put("mobileData", "1".equals(set.get("mobile_data")));
             o.put("netType", first(sec.get("NETTYPE")));
             o.put("operator", first(sec.get("OPER")));
             o.put("simNumeric", first(sec.get("NUMSIM")));
@@ -95,38 +114,16 @@ public final class Radio {
             if (slots.length() == 0) slots.put("未知");
             o.put("simSlots", slots);
 
-            // 驻留小区：4.4 无公开频段 API，走 getAllCellInfo()（API 17+）。
-            // 实测本机 ROM：RIL 支持 CELL_INFO_LIST（能拿到 PCI/TAC/CID），
-            // 但 CellIdentityLte 从不填 EARFCN（注册状态响应里也没有），
-            // 所以频段号在本 ROM 拿不到——pci/tac/cid 照常输出，earfcn/band 有则给。
-            try {
-                if (android.os.Build.VERSION.SDK_INT >= 17) {
-                    TelephonyManager tm = (TelephonyManager)
-                            ctx.getSystemService(Context.TELEPHONY_SERVICE);
-                    java.util.List<android.telephony.CellInfo> cis =
-                            tm == null ? null : tm.getAllCellInfo();
-                    if (cis != null) {
-                        for (int i = 0; i < cis.size(); i++) {
-                            android.telephony.CellInfo ci = cis.get(i);
-                            if (!(ci instanceof android.telephony.CellInfoLte)) continue;
-                            if (!ci.isRegistered()) continue;
-                            android.telephony.CellIdentityLte id =
-                                    ((android.telephony.CellInfoLte) ci).getCellIdentity();
-                            if (id == null) continue;
-                            o.put("pci", id.getPci());
-                            o.put("tac", id.getTac());
-                            o.put("cid", id.getCi());
-                            int e = lteEarfcn(id);
-                            if (e > 0) {
-                                o.put("earfcn", e);
-                                o.put("band", LteBand.fromEarfcn(e));
-                            }
-                            break;
-                        }
-                    }
+            // 驻留小区：getAllCellInfo() 在本机 ROM 一次要 4-5 秒（RIL 慢），
+            // 同步调会把整个 /api/radio 拖到 smoke 的 8s 超时边缘（真机踩过）。
+            // 改为后台线程 30s 刷新缓存，radioInfo 只读缓存，永不阻塞。
+            startCellInfoThread(ctx);
+            JSONObject cell = cellInfoCache;
+            if (cell != null) {
+                String[] keys = {"pci", "tac", "cid", "earfcn", "band"};
+                for (int i = 0; i < keys.length; i++) {
+                    if (cell.has(keys[i])) o.put(keys[i], cell.opt(keys[i]));
                 }
-            } catch (Throwable t) {
-                Logs.add("radio", "getAllCellInfo 失败: " + t);
             }
             o.put("route", join(sec.get("ROUTE")).trim());
             o.put("iccid", iccid(ctx));
@@ -419,6 +416,68 @@ public final class Radio {
     }
 
     // ---------- #16 SIM 锁 / ICCID ----------
+
+    // 驻留小区缓存：getAllCellInfo 慢（4-5s），后台线程定时刷新，radioInfo 读缓存
+    private static volatile JSONObject cellInfoCache = null;
+    private static volatile boolean cellThreadStarted = false;
+
+    /** 懒启动的守护线程：每 30s 刷新一次驻留小区缓存。 */
+    private static void startCellInfoThread(final Context ctx) {
+        if (cellThreadStarted) return;
+        synchronized (Radio.class) {
+            if (cellThreadStarted) return;
+            cellThreadStarted = true;
+            Thread t = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    while (true) {
+                        try {
+                            refreshCellInfo(ctx);
+                        } catch (Throwable ignored) {
+                        }
+                        try {
+                            Thread.sleep(30_000L);
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                }
+            });
+            t.setDaemon(true);
+            t.start();
+        }
+    }
+
+    /** 拉一次 getAllCellInfo 并写缓存；失败保留旧缓存。 */
+    private static void refreshCellInfo(Context ctx) {
+        if (android.os.Build.VERSION.SDK_INT < 17) return;
+        TelephonyManager tm = (TelephonyManager)
+                ctx.getSystemService(Context.TELEPHONY_SERVICE);
+        java.util.List<android.telephony.CellInfo> cis =
+                tm == null ? null : tm.getAllCellInfo();
+        if (cis == null) return;
+        for (int i = 0; i < cis.size(); i++) {
+            android.telephony.CellInfo ci = cis.get(i);
+            if (!(ci instanceof android.telephony.CellInfoLte)) continue;
+            if (!ci.isRegistered()) continue;
+            android.telephony.CellIdentityLte id =
+                    ((android.telephony.CellInfoLte) ci).getCellIdentity();
+            if (id == null) continue;
+            JSONObject c = new JSONObject();
+            try {
+                c.put("pci", id.getPci());
+                c.put("tac", id.getTac());
+                c.put("cid", id.getCi());
+                int e = lteEarfcn(id);
+                if (e > 0) {
+                    c.put("earfcn", e);
+                    c.put("band", LteBand.fromEarfcn(e));
+                }
+            } catch (Throwable ignored) {
+            }
+            cellInfoCache = c;
+            break;
+        }
+    }
 
     /**
      * 从 CellIdentityLte 反射拿 EARFCN。
@@ -749,6 +808,11 @@ public final class Radio {
     private static String first(List<String> in) {
         if (in == null || in.isEmpty()) return "";
         return in.get(0).trim();
+    }
+
+    /** null 安全转空串。 */
+    private static String nvl(String s) {
+        return s == null ? "" : s;
     }
 
     private static String join(List<String> in) {
