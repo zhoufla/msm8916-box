@@ -78,8 +78,10 @@
 | POST | `/api/messages/retry` | 重发（`{"id":123}`），顺带补建新通道的投递 |
 | POST | `/api/messages/test` | 注入测试消息（`{"peer","body"}`） |
 | POST | `/api/inbox/import` | 补收系统收件箱 |
+| POST | `/api/messages/delete` | 删收信：`{"id":123}` 单条（连投递一起删），`{"scope":"givenup"}` 清全部「已放弃」投递及因此变空的消息 |
 | POST | `/api/send` | 发短信（`{"to","body"}`） |
 | GET | `/api/outbox?limit=20` | 发件记录 |
+| POST | `/api/outbox/delete` | 删发件记录（`{"id":3}`，只删记录不动已发的短信） |
 | GET | `/api/config` | 当前生效配置 + 来源文件 + 面板状态 |
 | POST | `/api/config` | 保存配置（body 为完整配置 JSON） |
 | GET | `/api/wifi` | 热点 + station + 网卡 + 客户端 + `hint` |

@@ -388,6 +388,73 @@ public final class Db extends SQLiteOpenHelper {
         return arr;
     }
 
+    // ---------- 删除 ----------
+    //
+    // 设备上没有 sqlite3，面板是唯一能改库的入口，所以这里给到最小可用的清理能力：
+    // 单条删（连它的投递一起删）、把「已放弃」的投递连根清掉、单条删发件记录。
+    // 删 ev 前一定要先删 dl，否则 recentJson 的 LEFT 语义没做，会留下孤儿投递。
+
+    /** 删一条收信及其全部投递记录。返回是否真的删掉了。 */
+    public boolean deleteEvent(long id) {
+        if (id <= 0) return false;
+        try {
+            SQLiteDatabase db = getWritableDatabase();
+            String[] a = new String[]{String.valueOf(id)};
+            db.delete("dl", "ev_id=?", a);
+            return db.delete("ev", "id=?", a) > 0;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * 清掉所有「已放弃」的投递；连带删掉因此变成空壳的消息本体。
+     * 只处理确实有过放弃投递的消息，绝不动「还没来得及建投递」的新消息。
+     * 返回 {dl: 删掉的投递数, ev: 删掉的消息数}。
+     */
+    public int[] deleteGivenUp() {
+        int dl = 0, ev = 0;
+        List<Long> touched = new ArrayList<Long>();
+        Cursor c = null;
+        try {
+            c = getReadableDatabase().rawQuery(
+                    "SELECT DISTINCT ev_id FROM dl WHERE status=2", null);
+            while (c.moveToNext()) touched.add(c.getLong(0));
+        } catch (Throwable ignored) {
+        } finally {
+            if (c != null) c.close();
+        }
+        try {
+            SQLiteDatabase db = getWritableDatabase();
+            dl = db.delete("dl", "status=2", null);
+            for (int i = 0; i < touched.size(); i++) {
+                String id = String.valueOf(touched.get(i));
+                Cursor k = null;
+                try {
+                    k = db.rawQuery("SELECT COUNT(1) FROM dl WHERE ev_id=?", new String[]{id});
+                    if (k.moveToFirst() && k.getInt(0) == 0) {
+                        ev += db.delete("ev", "id=?", new String[]{id});
+                    }
+                } finally {
+                    if (k != null) k.close();
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return new int[]{dl, ev};
+    }
+
+    /** 删一条发件记录。返回是否真的删掉了。 */
+    public boolean deleteOut(long id) {
+        if (id <= 0) return false;
+        try {
+            return getWritableDatabase().delete("out", "id=?",
+                    new String[]{String.valueOf(id)}) > 0;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     /** 已完成的接收记录保留 3 天；发件记录同样保留 3 天。 */
     public void prune() {
         try {
