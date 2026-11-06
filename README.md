@@ -98,9 +98,12 @@ curl -u admin:admin -X POST -d '{"to":"10086","body":"1"}' http://192.168.42.129
 
 ```sh
 sh build.sh          # 产物 dist/com.sp970.smsrelay-1.1.apk（约 57KB，自签名）
+sh tools/run-tests.sh  # 离线测试：通道 JSON/钉钉载荷/验证码/退避/HTTP 服务，不需要设备
 ```
 
 `aapt` 会把 `assets/web/index.html` 打进包，所以改了页面必须重新构建。
+`tools/run-tests.sh` 用纯 JVM 跑 `test/` 下的断言（自己下 org.json，不需要 Android SDK），
+真机不在手边时先用它挡纯逻辑问题。
 
 ## 部署（设备 192.168.42.129，网络 adb）
 
@@ -170,6 +173,7 @@ msm8916-box/
 ├── build.sh                   # aapt→javac→d8→zipalign→apksigner 六步流水线
 ├── src/com/sp970/smsrelay/    # 21 个类，无第三方依赖，无 res/
 ├── assets/web/index.html      # 面板单页（aapt -A assets 打包）
+├── test/                      # 离线测试源码（纯 JVM，tools/run-tests.sh 驱动）
 ├── config/smsrelay.conf.example
-└── tools/                     # smoke-test.sh 自检；patch-*.sh 镜像离线定制
+└── tools/                     # run-tests.sh 离线测试、smoke-test.sh 装完自检、patch-*.sh 镜像定制
 ```

@@ -39,12 +39,23 @@ public final class WebPanel {
     private final Http http;
     private final String user;
     private final String pass;
+    private Db db;
 
     private WebPanel(Context app, Http http, String user, String pass) {
         this.app = app;
         this.http = http;
         this.user = user;
         this.pass = pass;
+    }
+
+    /** 面板常驻，复用同一个 SQLiteOpenHelper，别按请求新建连接。 */
+    private Db db() {
+        if (db == null) {
+            synchronized (this) {
+                if (db == null) db = new Db(app);
+            }
+        }
+        return db;
     }
 
     // ---------- 生命周期 ----------
@@ -199,7 +210,7 @@ public final class WebPanel {
 
     private JSONObject status(JSONObject p) throws Exception {
         AppConfig cfg = AppConfig.load(app);
-        Db db = new Db(app);
+        Db db = db();
         long up = SystemClock.elapsedRealtime();
 
         JSONObject o = new JSONObject();
@@ -269,7 +280,7 @@ public final class WebPanel {
         if (limit > 300) limit = 300;
         JSONObject o = new JSONObject();
         o.put("ok", true);
-        o.put("messages", new Db(app).recentJson(limit));
+        o.put("messages", db().recentJson(limit));
         return o.toString();
     }
 
@@ -279,7 +290,7 @@ public final class WebPanel {
         if (limit > 200) limit = 200;
         JSONObject o = new JSONObject();
         o.put("ok", true);
-        o.put("messages", new Db(app).outboxJson(limit));
+        o.put("messages", db().outboxJson(limit));
         return o.toString();
     }
 
@@ -373,7 +384,7 @@ public final class WebPanel {
         long id = p.optLong("id", 0);
         if (id <= 0) throw new IllegalArgumentException("缺少消息 id");
         AppConfig cfg = AppConfig.load(app);
-        Db db = new Db(app);
+        Db db = db();
         db.retryEventWithChannels(id, cfg.names());
         RelayService.wake(app);
         JSONObject o = new JSONObject();
@@ -389,7 +400,7 @@ public final class WebPanel {
         e.peer = p.optString("peer", "10086");
         e.body = p.optString("body", "面板测试消息 " + e.ts);
         e.code = SmsEvent.extractCode(e.body);
-        Db db = new Db(app);
+        Db db = db();
         long id = db.insertEvent(e);
         db.ensureDeliveries(id, cfg.names());
         RelayService.wake(app);
