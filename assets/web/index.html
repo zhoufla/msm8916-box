@@ -1433,17 +1433,19 @@ function saveMaintCfg(btn){
   });
 }
 /* ---------- 命令页：常用命令 + 执行历史 ---------- */
+/* 注意：这台 4.4 是极简 toolbox（没有 md5sum/tail/df-h 等），统一走 helper 部署的
+   /system/xbin/busybox 补齐；每条预设都经过 tools/panel-e2e.sh 真机验证 exit=0。 */
 var CMD_PRESETS = [
   ['运行时长','uptime; cat /proc/uptime'],
   ['内存','cat /proc/meminfo | grep -E "MemTotal|MemFree|MemAvailable|Buffers|^Cached"'],
   ['CPU 负载与核数','cat /proc/loadavg; for f in /sys/devices/system/cpu/cpu*/online; do echo "$f=$(cat $f 2>/dev/null)"; done'],
   ['温区','for z in /sys/class/thermal/thermal_zone*; do echo "$z: $(cat $z/type 2>/dev/null) $(cat $z/temp 2>/dev/null)"; done'],
-  ['磁盘','df -h'],
+  ['磁盘','/system/xbin/busybox df -h'],
   ['监听端口','netstat -ltn'],
   ['SIM 与网络','getprop gsm.sim.state; getprop gsm.network.type; getprop gsm.operator.alpha'],
   ['服务状态','ps | grep -E "smsrelay|httpd|crond" | grep -v grep'],
-  ['helper 身份','id; cat /system/etc/relay-helper/token | md5sum'],
-  ['最近崩溃','dmesg | tail -40'],
+  ['helper 身份','id; /system/xbin/busybox md5sum /system/etc/relay-helper/token'],
+  ['最近崩溃','dmesg | /system/xbin/busybox tail -40'],
   ['logcat 尾部','logcat -d -t 100'],
   ['ping 外网','ping -c 4 223.5.5.5']
 ];
