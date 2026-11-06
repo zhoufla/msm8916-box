@@ -198,10 +198,8 @@ public final class WebPanel {
             return post ? Http.Resp.json(wifiApply(p)) : Http.Resp.json(wifiState());
         }
         if ("/api/wifi/scan".equals(path)) {
-            JSONObject o = new JSONObject();
-            o.put("ok", true);
-            o.put("list", WifiCtl.scan(app));
-            return Http.Resp.json(o.toString());
+            // scan 自己带 ok / list / hint（热点开着时单射频扫不了，要给出原因）
+            return Http.Resp.json(WifiCtl.scan(app).toString());
         }
         return Http.Resp.error(404, "没有这个接口: " + path);
     }
@@ -423,12 +421,8 @@ public final class WebPanel {
         String action = p.optString("action", "");
         String ssid = p.optString("ssid", "");
         String pass = p.optString("pass", "");
-        String msg = WifiCtl.apply(app, action, ssid, pass);
-        JSONObject o = new JSONObject();
-        o.put("ok", true);
-        o.put("message", msg);
-        o.put("state", WifiCtl.state(app));
-        return o.toString();
+        // WifiCtl.apply 直接回 {ok, message, state}，失败时 ok=false 而不是永远 true
+        return WifiCtl.apply(app, action, ssid, pass).toString();
     }
 
     // ---------- 工具 ----------

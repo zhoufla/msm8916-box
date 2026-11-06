@@ -33,9 +33,14 @@ import java.util.List;
  */
 public final class SysInfo {
 
-    private static volatile int asu = -1;          // 0..31，99/负数表示未知
+    private static volatile int asu = -1;          // 0..31(gsm) / 0..97(lte)，负数表示未知
     private static volatile int dbm = 0;
     private static volatile int level = 0;         // 0..4
+    private static volatile int rsrp = 0;          // LTE 专用，dBm
+    private static volatile int rsrq = 0;          // LTE 质量，dB
+    private static volatile int rssnr = 0;         // LTE 信噪比，1/10 dB
+    private static volatile int lteSs = -1;        // LTE 0..63 刻度
+    private static volatile String tech = "";      // gsm / lte / gsm|lte
     private static volatile String operator = "";
     private static volatile String serviceState = "";
     private static String propClassOk = null;
@@ -83,26 +88,54 @@ public final class SysInfo {
      * 取一次信号读数。
      *
      * Android 4.4 的 SignalStrength 只有 GSM 的公开取值，而纯 LTE 网络下
-     * {@link SignalStrength#getGsmSignalStrength()} 恒为 99（未知），真实读数在 LTE 的 rsrp 上
-     * （本机实测 "SignalStrength: 99 0 -120 -160 -120 -1 -1 25 -97 -14 -12 ..."）。
-     * 所以这里解析 toString()：字段顺序 4.x 到 13 都稳定，也不碰隐藏 API。
+     * {@link SignalStrength#getGsmSignalStrength()} 恒为 99（未知），真实读数在 LTE 的 rsrp 上。
+     * 本机实测原文（字段顺序 4.x 起稳定）：
+     * <pre>
+     * SignalStrength: 99 0 -120 -160 -120 -1 -1 25 -96 -15 0 2147483647 2147483647 gsm|lte
+     *                 ↑gsm ↑ber ↑cdmaDbm ...  ↑lteSs ↑rsrp ↑rsrq ↑rssnr ↑cqi ↑ta  ↑制式
+     * </pre>
+     * 所以这里解析 toString()，不碰隐藏 API。最后一段是制式，直接拿来标 gsm/lte。
      */
     static void applySignal(SignalStrength ss) {
         String s = ss.toString();
         int i = s.indexOf(':');
         if (i < 0) return;
-        String[] p = s.substring(i + 1).trim().split("\\s+");
+        String rest = s.substring(i + 1).trim();
+        String[] p = rest.split("\\s+");
+
+        // 末尾的 "gsm|lte" 是制式标记，不是数字
+        for (int k = 0; k < p.length; k++) {
+            String t = p[k].toLowerCase();
+            if (t.indexOf("lte") >= 0 || t.indexOf("gsm") >= 0) {
+                tech = p[k];
+                String[] q = new String[k];
+                System.arraycopy(p, 0, q, 0, k);
+                p = q;
+                break;
+            }
+        }
+
         int gsm = tok(p, 0);       // GSM asu，99 = 未知
         int cdmaDbm = tok(p, 2);   // 2G/3G CDMA
-        int rsrp = tok(p, 8);      // LTE rsrp (dBm)
+        int cdmaEcio = tok(p, 3);
+        int lteS = tok(p, 7);      // LTE 0..63
+        int r = tok(p, 8);         // LTE rsrp
+        int q = tok(p, 9);         // LTE rsrq
+        int sn = tok(p, 10);       // LTE rssnr
 
-        if (rsrp >= -140 && rsrp <= -44) {          // 有 LTE 读数时以它为准
-            asu = rsrp + 140;                       // 0~97
-            dbm = rsrp;
-            level = rsrp >= -85 ? 4 : rsrp >= -95 ? 3 : rsrp >= -105 ? 2
-                    : rsrp >= -115 ? 1 : 0;
+        lteSs = lteS;
+        rsrq = q;
+        rssnr = sn;
+
+        if (r >= -140 && r <= -44) {                // 有 LTE 读数时以它为准
+            rsrp = r;
+            asu = r + 140;                          // 0~97
+            dbm = r;
+            level = r >= -85 ? 4 : r >= -95 ? 3 : r >= -105 ? 2
+                    : r >= -115 ? 1 : 0;
             return;
         }
+        rsrp = 0;
         if (gsm >= 0 && gsm <= 31) {                // 2G / 3G 用 GSM 刻度
             asu = gsm;
             dbm = -113 + 2 * gsm;
@@ -114,6 +147,13 @@ public final class SysInfo {
             asu = Math.max(0, Math.min(16, (cdmaDbm + 113) / 2));
             level = cdmaDbm >= -75 ? 4 : cdmaDbm >= -85 ? 3 : cdmaDbm >= -95 ? 2
                     : cdmaDbm >= -100 ? 1 : 0;
+            return;
+        }
+        if (lteS >= 0 && lteS <= 63) {              // 只有 LTE 刻度没有 rsrp 的 ROM
+            lteSs = lteS;
+            level = lteS >= 25 ? 4 : lteS >= 18 ? 3 : lteS >= 12 ? 2 : lteS >= 5 ? 1 : 0;
+            asu = -1;
+            dbm = 0;
             return;
         }
         asu = -1;
@@ -186,6 +226,8 @@ public final class SysInfo {
             o.put("service", serviceState);
             o.put("netType", netType(ctx));
             o.put("sim", simState(ctx));
+            o.put("simOperator", simOperator(ctx));
+            o.put("roaming", roaming(ctx));
             o.put("storage", storage());
             o.put("traffic", traffic());
             o.put("memory", memory());
@@ -228,14 +270,19 @@ public final class SysInfo {
             s.put("asu", asu);
             s.put("dbm", dbm);
             s.put("level", level);
+            s.put("tech", tech);
+            if (rsrp != 0) s.put("rsrp", rsrp);
+            if (rsrq != 0) s.put("rsrq", rsrq);
+            if (rssnr != 0) s.put("rssnr", rssnr);
+            if (lteSs >= 0) s.put("lteSs", lteSs);
             s.put("text", asu < 0 ? "未知"
                     : level >= 4 ? "很强" : level == 3 ? "良好" : level == 2 ? "一般"
                     : level == 1 ? "较弱" : "很弱");
-            // 没拿到蜂窝信号时补一个 WiFi RSSI，面板上至少有个数
+            // WiFi 那一侧的 RSSI，蜂窝和 WiFi 分开看才不糊涂
             try {
                 android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager)
                         ctx.getSystemService(Context.WIFI_SERVICE);
-                if (wm != null && wm.getConnectionInfo() != null) {
+                if (wm != null && wm.isWifiEnabled() && wm.getConnectionInfo() != null) {
                     s.put("wifiRssi", wm.getConnectionInfo().getRssi());
                 }
             } catch (Throwable ignored) {
@@ -243,6 +290,32 @@ public final class SysInfo {
         } catch (Throwable ignored) {
         }
         return s;
+    }
+
+    private static String simOperator(Context ctx) {
+        try {
+            TelephonyManager tm =
+                    (TelephonyManager) ctx.getSystemService(Context.TELEPHONY_SERVICE);
+            if (tm == null) return "";
+            String num = tm.getSimOperator();               // 46000
+            String name = tm.getSimOperatorName();          // CMCC
+            if (num == null) num = "";
+            if (name == null) name = "";
+            if (num.length() == 0) return name;
+            return name.length() == 0 ? num : name + " " + num;
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    private static boolean roaming(Context ctx) {
+        try {
+            TelephonyManager tm =
+                    (TelephonyManager) ctx.getSystemService(Context.TELEPHONY_SERVICE);
+            return tm != null && tm.isNetworkRoaming();
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     private static String netType(Context ctx) {
