@@ -128,8 +128,18 @@ public final class Update {
                 return st;
             }
 
-            JSONObject rel = "manifest".equals(mode)
-                    ? fromManifest(cfg) : fromGithub(cfg);
+            JSONObject rel;
+            if ("manifest".equals(mode)) {
+                rel = fromManifest(cfg);
+            } else {
+                try {
+                    rel = fromGithub(cfg);
+                } catch (Throwable api) {
+                    // API 限流（同一出口 IP 每小时 60 次）或 api.github.com 不通时，
+                    // 退到 release 里挂的 latest.json —— 走 github.com，不占 API 配额。
+                    rel = fromReleaseJson(cfg, api);
+                }
+            }
 
             String ver = Ver.norm(rel.optString("version", ""));
             st.put("latest", ver);
@@ -137,8 +147,9 @@ public final class Update {
             st.put("size", rel.optLong("size", 0));
             st.put("sha256", rel.optString("sha256", ""));
             st.put("url", rel.optString("url", ""));
+            st.put("browser", rel.optString("browser", ""));
             st.put("assetId", rel.optLong("assetId", 0));
-            st.put("source", mode);
+            st.put("source", rel.optString("source", mode));
 
             boolean newer = ver.length() > 0 && Ver.newer(ver, currentName(ctx));
             st.put("found", newer);
@@ -191,6 +202,7 @@ public final class Update {
         JSONArray assets = rel.optJSONArray("assets");
         long apkId = 0;
         String apkUrl = "";
+        String apkBrowser = "";
         long size = 0;
         String sha = "";
         JSONObject jsonAsset = null;
@@ -200,8 +212,9 @@ public final class Update {
             String name = a.optString("name", "").toLowerCase(Locale.US);
             if (name.endsWith(".apk") && apkId == 0) {
                 apkId = a.optLong("id", 0);
-                // 不用 browser_download_url：它指到 github.com，这台机器连不上
                 apkUrl = a.optString("url", "");
+                // github.com 上的直链：不占 API 配额，能用就优先用它
+                apkBrowser = a.optString("browser_download_url", "");
                 size = a.optLong("size", 0);
             } else if (name.equals("latest.json")) {
                 jsonAsset = a;
@@ -210,13 +223,15 @@ public final class Update {
         if (apkId == 0) throw new IllegalStateException("这个 Release 没挂 .apk 资产");
         out.put("assetId", apkId);
         out.put("url", apkUrl);
+        out.put("browser", apkBrowser);
         out.put("size", size);
 
         // 有 latest.json 就取其中的 sha256（可选，失败不影响升级）
         if (jsonAsset != null) {
             try {
-                Net.Resp jr = Net.getAuto(jsonAsset.optString("url", ""), cfg.updateInsecure,
-                        "application/octet-stream");
+                String ju = jsonAsset.optString("browser_download_url", "");
+                if (ju.length() == 0) ju = jsonAsset.optString("url", "");
+                Net.Resp jr = Net.getAuto(ju, cfg.updateInsecure, "application/json");
                 if (jr.code == 200) {
                     JSONObject j = new JSONObject(jr.body);
                     sha = j.optString("sha256", "");
@@ -232,19 +247,48 @@ public final class Update {
     private static JSONObject fromManifest(AppConfig cfg) throws Exception {
         String url = cfg.updateManifest == null ? "" : cfg.updateManifest.trim();
         if (!url.startsWith("http")) throw new IllegalArgumentException("manifest 地址要以 http 开头");
+        JSONObject out = parseManifest(url, cfg, url);
+        out.put("source", "manifest");
+        return out;
+    }
+
+    /**
+     * GitHub API 不可用时的兜底：直接读 release 里挂的 latest.json。
+     * 这个地址走 github.com（网页/直链），不计入 API 每小时 60 次的配额，
+     * 所以限流时仍然能查到版本、拿到 sha256，再从直链下载。
+     */
+    private static JSONObject fromReleaseJson(AppConfig cfg, Throwable api) throws Exception {
+        String repo = cfg.updateRepo == null ? "" : cfg.updateRepo.trim();
+        try {
+            if (repo.indexOf('/') <= 0) throw new IllegalArgumentException("仓库要写成 owner/repo");
+            String base = "https://github.com/" + repo + "/releases/latest/download/";
+            JSONObject out = parseManifest(base + "latest.json", cfg, base);
+            out.put("source", "release-json");
+            out.put("notes", "GitHub API 不可用（" + msg(api) + "），已改用 release 里的 latest.json");
+            Logs.add("update", "API 不可用，改用 latest.json：v" + out.optString("version", ""));
+            return out;
+        } catch (Throwable t) {
+            throw new IllegalStateException(msg(api) + "；备用 latest.json 也失败：" + msg(t));
+        }
+    }
+
+    /**
+     * 解析清单。apk 地址可以是绝对地址，也可以是相对清单所在目录的文件名
+     * （build.sh 产出的 latest.json 里就是裸文件名）。
+     */
+    private static JSONObject parseManifest(String url, AppConfig cfg, String base) throws Exception {
         Net.Resp r = Net.getAuto(url, cfg.updateInsecure, "application/json");
-        int code = r.code;
-        String body = r.body;
-        if (code != 200) throw new IllegalStateException("manifest 返回 HTTP " + code);
-        JSONObject j = new JSONObject(body);
+        if (r.code != 200) throw new IllegalStateException("manifest 返回 HTTP " + r.code);
+        JSONObject j = new JSONObject(r.body);
         JSONObject out = new JSONObject();
         out.put("version", j.optString("version", j.optString("tag_name", "")));
         out.put("notes", j.optString("notes", j.optString("body", "")));
         out.put("size", j.optLong("size", 0));
         out.put("sha256", j.optString("sha256", ""));
         String apk = j.optString("url", "");
-        if (apk.length() == 0) throw new IllegalStateException("manifest 里没有 url 字段");
-        out.put("url", apk);
+        if (apk.length() == 0) apk = j.optString("apk", "");
+        if (apk.length() == 0) throw new IllegalStateException("manifest 里没有 url/apk 字段");
+        out.put("url", Ver.abs(base, apk));
         return out;
     }
 
@@ -274,7 +318,7 @@ public final class Update {
             apk = new File(dir(), "smsrelay-" + ver + ".apk");
             if (apk.exists()) apk.delete();
             Logs.add("update", "开始下载 " + ver + " → " + apk.getName());
-            download(ctx, cfg, url, st.optLong("assetId", 0), apk, st);
+            download(ctx, cfg, url, st.optString("browser", ""), apk, st);
 
             // 1) sha256
             String want = st.optString("sha256", "");
@@ -321,10 +365,30 @@ public final class Update {
         return r;
     }
 
-    private static void download(final Context ctx, AppConfig cfg, String url, long assetId,
+    private static void download(final Context ctx, AppConfig cfg, String url, String browser,
                                  File out, final JSONObject st) throws Exception {
+        String[] tries = browser.length() > 0 && !browser.equals(url)
+                ? new String[]{browser, url} : new String[]{url};
+        Net.Resp r = null;
+        for (String u : tries) {
+            if (u == null || u.length() == 0) continue;
+            Net.Resp one = fetch(ctx, cfg, u, out, st);
+            r = one;
+            if (one.code < 400) break;
+            Logs.add("update", "下载源失败 HTTP " + one.code + "：" + Ver.brief(u, 90));
+        }
+        if (r == null) throw new IllegalStateException("没有可用的下载地址");
+        if (r.code >= 400) throw new IllegalStateException("下载失败 HTTP " + r.code);
+        try {
+            st.put("transport", r.transport);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static Net.Resp fetch(final Context ctx, AppConfig cfg, String url,
+                                  File out, final JSONObject st) throws Exception {
         final int[] lastPct = new int[]{-1};
-        Net.Resp r = Net.downloadAuto(url, cfg.updateInsecure, "application/octet-stream", out,
+        return Net.downloadAuto(url, cfg.updateInsecure, "application/octet-stream", out,
                 new Net.Progress() {
                     @Override
                     public void on(long done, long total) {
@@ -339,11 +403,6 @@ public final class Update {
                         }
                     }
                 });
-        if (r.code >= 400) throw new IllegalStateException("下载失败 HTTP " + r.code);
-        try {
-            st.put("transport", r.transport);
-        } catch (Throwable ignored) {
-        }
     }
 
     /**
