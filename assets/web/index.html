@@ -379,6 +379,12 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
       </div>
 
       <div class="card">
+        <h3>SIM 卡</h3>
+        <div id="simCard" class="hint">读取中…</div>
+        <div class="hint" style="margin-top:8px">这台按双卡（dsds）编译：槽位状态来自 <code>gsm.sim.state</code>，插了卡才有 ICCID/IMSI 读数。没有内置卡/第二卡座时槽 2 会一直显示 ABSENT，属正常。</div>
+      </div>
+
+      <div class="card">
         <h3>网络制式</h3>
         <label class="fld"><span>首选网络类型</span>
           <select id="netMode">
@@ -1617,12 +1623,24 @@ function loadNet(){
     $('netState').innerHTML=
       kv('制式','<span class="mono">'+esc(modeTxt)+'</span> · '+esc(d.modeLabel||''))+
       kv('网络',esc(d.netType||'-')+' · '+esc(d.operator||'-'))+
-      kv('SIM',esc(d.simState||'-')+' · '+esc(d.simNumeric||'-'))+
-      kv('ICCID','<span class="mono">'+esc(d.iccid||'读不到')+'</span>')+
-      kv('IMSI','<span class="mono">'+esc(d.imsi||'读不到')+'</span>')+
       kv('首选 APN',esc(d.preferredApn||'-')+' <span class="mono">'+
         (d.preferredApnApn?'（'+esc(d.preferredApnApn)+'）':'')+'</span>')+
       kv('默认路由','<span class="mono">'+esc((d.route||'-').split('\n')[0])+'</span>');
+    // SIM 卡：双槽状态 chips + 卡身份（ICCID/IMSI）
+    var slots=d.simSlots||[];
+    var simH='<div class="row" style="margin-bottom:8px">';
+    for(var si=0;si<slots.length;si++){
+      var st=String(slots[si]);
+      var cls=st==='READY'?'ok':'';
+      simH+='<span class="chip '+cls+'">槽 '+(si+1)+' · '+esc(st)+
+        (st==='READY'?'':'（无卡）')+'</span>';
+    }
+    if(!slots.length) simH+='<span class="chip wait">状态不可读</span>';
+    simH+='</div>';
+    simH+=kv('运营商',esc(d.operator||'-')+' <span class="mono">'+esc(d.simNumeric||'-')+'</span>')+
+      kv('ICCID','<span class="mono">'+esc(d.iccid||'读不到')+'</span>')+
+      kv('IMSI','<span class="mono">'+esc(d.imsi||'读不到')+'</span>');
+    $('simCard').innerHTML=simH;
     $('swData').className='sw'+(d.mobileData?' on':'');
     $('swRoam').className='sw'+(d.roaming?' on':'');
     if(d.mode>=0) $('netMode').value=String(d.mode);
