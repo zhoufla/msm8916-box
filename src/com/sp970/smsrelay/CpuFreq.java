@@ -278,15 +278,21 @@ public final class CpuFreq {
     }
 
     /**
-     * 服务循环校正：已启用且实际 max 与配置不一致时重新应用。
-     * thermal/厂商脚本改回去的场景在这里被拉回；helper 不可用就等下一轮。
+     * 服务循环校正：已启用且实际 max 高于配置时重新应用。
+     * ⚠ 只往上拉、不往下压：热保护（msm_thermal）高温时会写同一个节点降频自保，
+     * 那种下调必须尊重——如果把「不等于就改回」改成无脑恢复，会和热保护打架
+     * （维持逻辑把热保护的降频顶回去）。热保护降温后自己会恢复，届时若仍高于
+     * 我们的限值，这里下一轮再拉回来。
      */
     public static void enforce(Context ctx) {
         try {
             CpuCfg c = load(ctx);
             if (!c.enabled || c.maxKhz <= 0) return;
             String cur = rootCat(ctx, BASE + "/scaling_max_freq");
-            if (cur.length() == 0 || String.valueOf(c.maxKhz).equals(cur)) return;
+            if (cur.length() == 0) return;
+            long curMax;
+            try { curMax = Long.parseLong(cur); } catch (Throwable t) { return; }
+            if (curMax <= c.maxKhz) return;   // 等于=正常；更低=热保护在压，不碰
             apply(ctx, c.minKhz, c.maxKhz, true);
         } catch (Throwable ignored) {
         }
