@@ -544,9 +544,11 @@ public final class Maint {
 
     /**
      * LED 定位（torch-light）。
-     * ⚠ 回退到最初版本做基线对比（2026-11-07 用户要求）：
-     * 写 7、toolbox sleep 0.3、不动 trigger。行为记录：
-     *  亮=闪烁 / 灭=常亮 / 闪8下只见4下——用这个基线与各修正版对照，定位真实模型。
+     * ⚠ 回退到最初版本（2026-11-07 用户要求，两次验证后仍不理想）：
+     * 写 7、toolbox sleep 0.3、不动 trigger。已知行为：亮=闪烁 / 灭=常亮 / 闪8下只见4下。
+     * 出光模型结论（A/B 实测）：trigger 挂载时 255 才是稳定全亮、0 会被锁存成常亮、
+     * 7 是低占空比闪烁；摘 trigger 全灭。但闪 8 下需逐相位切 trigger，用户实测仍不理想，
+     * 暂回退第一版，后续再研究（可能是 PMIC 手电通道的硬件特性）。
      */
     public static JSONObject led(Context ctx, String action) {
         JSONObject o = new JSONObject();

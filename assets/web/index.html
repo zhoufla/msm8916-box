@@ -257,6 +257,10 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
     </div>
     <div class="card" style="margin-top:10px">
       <h3>CPU 频率限制</h3>
+      <div class="row" style="margin-bottom:8px">
+        <div class="sw" id="cfSw" onclick="toggleCfSw()"><i></i></div>
+        <span class="hint" id="cfSwHint">限频总开关（关 = 解除限频，恢复全速）</span>
+      </div>
       <div id="cfInfo" class="hint">读取中…</div>
       <div class="sep"></div>
       <div class="grid g3">
@@ -1233,14 +1237,34 @@ function loadCpufreq(){
     $('cfInfo').innerHTML=
       kv2('当前频率',fmtFreq(d.cur)+' · governor '+esc(d.governor||'-'))+
       kv2('限值',fmtFreq(d.min)+' ~ '+fmtFreq(d.max)+
-        (d.enabled?' <span class="chip ok">维持中</span>':''))+
+        (d.enabled?' <span class="chip ok">维持中</span>':' <span class="chip">未启用</span>'))+
       kv2('核','<span class="mono">'+(d.onlineCores!==undefined?d.onlineCores+' 核在线':'-')+
         (d.relatedCpus?' · related: '+esc(d.relatedCpus):'')+'</span>');
     // 有已保存配置就用配置值预选，否则用当前实际值
     fillFreqSel('cfMax', av, Number(d.cpuMaxKhz)>0?d.cpuMaxKhz:d.max);
     fillFreqSel('cfMin', av, Number(d.cpuMinKhz)>0?d.cpuMinKhz:d.min);
     $('cfAuto').value=d.enabled?'1':'0';
+    $('cfSw').className='sw'+(d.enabled?' on':'');
+    $('cfSwHint').textContent=d.enabled
+      ? '限频总开关：开启中（关掉会立即解除限频、恢复全速）'
+      : '限频总开关：已关闭（打开会按下面保存的限值恢复维持）';
   });
+}
+function toggleCfSw(){
+  var on=$('cfSw').className.indexOf('on')>=0;
+  if(!on){
+    // 开：启用维持（需要已保存过限值）
+    api('POST','/api/maint/cpufreq',{setEnabled:true},function(d){
+      toast(d.ok?d.message:(d.message||d.error||'失败'),!d.ok);
+      loadCpufreq();
+    });
+  }else{
+    if(!confirm('关闭限频并解除限制（恢复全速 1.21 GHz）？')) return;
+    api('POST','/api/maint/cpufreq',{disable:true},function(d){
+      toast(d.ok?d.message:(d.message||d.error||'失败'),!d.ok);
+      loadCpufreq();
+    });
+  }
 }
 function applyCpufreq(btn){
   if(btn) btn.disabled=true;

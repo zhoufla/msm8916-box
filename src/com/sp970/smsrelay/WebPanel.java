@@ -359,11 +359,6 @@ public final class WebPanel {
             int g = p.optInt("healthIntervalMin", 30);
             if (g < 1 || g > 1440) throw new IllegalArgumentException("体检间隔要在 1~1440 分钟");
             mt.put("healthIntervalMin", g);
-            // 这里是重建 maint 段，必须把 CPU 限频字段带上，否则保存 helper 配置会把限频抹掉
-            AppConfig cur = AppConfig.load(app);
-            mt.put("cpuLimitEnabled", cur.cpuLimitEnabled);
-            mt.put("cpuMaxKhz", cur.cpuMaxKhz);
-            mt.put("cpuMinKhz", cur.cpuMinKhz);
             root.put("maint", mt);
             AppConfig.saveEffective(app, root.toString(2));
             Logs.add("maint", "helper 配置改为 " + u);
@@ -376,30 +371,24 @@ public final class WebPanel {
             if (!post) {
                 JSONObject o = CpuFreq.info(app);
                 o.put("ok", true);
-                AppConfig cfg = AppConfig.load(app);
-                o.put("enabled", cfg.cpuLimitEnabled);
-                o.put("cpuMaxKhz", cfg.cpuMaxKhz);
-                o.put("cpuMinKhz", cfg.cpuMinKhz);
+                // CPU 限频配置存独立 prefs 键（不进 config JSON，防其它保存路径回退）
+                CpuFreq.CpuCfg c = CpuFreq.load(app);
+                o.put("enabled", c.enabled);
+                o.put("cpuMaxKhz", c.maxKhz);
+                o.put("cpuMinKhz", c.minKhz);
                 return Http.Resp.json(o.toString());
             }
             long max = p.optLong("max", 0);
             long min = p.optLong("min", 0);
             boolean auto = p.optBoolean("auto", false);
-            JSONObject o = CpuFreq.apply(app, min, max, auto);
-            if (o.optBoolean("ok")) {
-                JSONObject root = new JSONObject(AppConfig.effectiveJson(app));
-            JSONObject mt = root.optJSONObject("maint");
-            if (mt == null) {
-                mt = new JSONObject();
-                root.put("maint", mt);
-            }
-            mt.put("cpuLimitEnabled", auto);
-            mt.put("cpuMaxKhz", max);
-            mt.put("cpuMinKhz", min);
-            root.put("maint", mt);
-            AppConfig.saveEffective(app, root.toString(2));
-            Logs.add("maint", "CPU 限频配置保存 enabled=" + auto + " max=" + max + " min=" + min);
-            o.put("saved", true);
+            // apply 内部直接写独立 prefs 键并打日志
+            JSONObject o;
+            if (p.optBoolean("disable")) {
+                o = CpuFreq.disable(app);
+            } else if (p.has("setEnabled")) {
+                o = CpuFreq.setEnabled(app, p.optBoolean("setEnabled"));
+            } else {
+                o = CpuFreq.apply(app, min, max, auto);
             }
             return Http.Resp.json(o.toString());
         }
