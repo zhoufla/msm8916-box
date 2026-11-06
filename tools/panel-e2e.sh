@@ -125,6 +125,16 @@ get /api/maint/files mf.json
 chktrue "/api/maint/files ok"      "$WORK/mf.json" "d.get('ok')"
 get /api/maint/cron mc.json
 chktrue "/api/maint/cron ok"       "$WORK/mc.json" "d.get('ok')"
+get /api/maint/cpufreq cpu.json
+chktrue "/api/maint/cpufreq ok 且频率表>=5 档" "$WORK/cpu.json" "(d.get('ok')) and len(d.get('available') or [])>=5"
+chktrue "/api/maint/cpufreq 当前 max 有效" "$WORK/cpu.json" "(d.get('max') or '0').isdigit() and int(d['max'])>0"
+# 幂等应用：把当前 max/min 原样写回，验证 root 写入链路（不改变设备状态）
+CURMAX=$(jval "$WORK/cpu.json" "d['max']")
+CURMIN=$(jval "$WORK/cpu.json" "d['min']")
+post /api/maint/cpufreq "{\"max\":$CURMAX,\"min\":$CURMIN,\"auto\":false}" cpuap.json
+chktrue "/api/maint/cpufreq 幂等应用 ok" "$WORK/cpuap.json" "d.get('ok')"
+post /api/maint/cpufreq '{"max":123456,"min":200000,"auto":false}' cpubad.json
+chktrue "/api/maint/cpufreq 非法频率被拒绝" "$WORK/cpubad.json" "not d.get('ok')"
 
 echo "== 写接口（非破坏）"
 post /api/messages/test '{"peer":"10086","body":"panel-e2e"}' mt.json
