@@ -240,8 +240,7 @@ public final class WebPanel {
                     p.optString("target", ""), p.optString("iface", ""),
                     p.optInt("count", 4)).toString());
         }
-        if ("/api/wifi/adv".equals(path)) {
-            return Http.Resp.json(post
+        if ("/api/wifi/adv".equals(path)) {            return Http.Resp.json(post
                     ? WifiCtl.advApply(app, p.optString("action", ""),
                     p.optString("arg", ""), p.optString("arg2", "")).toString()
                     : WifiCtl.advInfo(app).toString());
@@ -360,12 +359,47 @@ public final class WebPanel {
             int g = p.optInt("healthIntervalMin", 30);
             if (g < 1 || g > 1440) throw new IllegalArgumentException("体检间隔要在 1~1440 分钟");
             mt.put("healthIntervalMin", g);
+            // 这里是重建 maint 段，必须把 CPU 限频字段带上，否则保存 helper 配置会把限频抹掉
+            AppConfig cur = AppConfig.load(app);
+            mt.put("cpuLimitEnabled", cur.cpuLimitEnabled);
+            mt.put("cpuMaxKhz", cur.cpuMaxKhz);
+            mt.put("cpuMinKhz", cur.cpuMinKhz);
             root.put("maint", mt);
             AppConfig.saveEffective(app, root.toString(2));
             Logs.add("maint", "helper 配置改为 " + u);
             JSONObject o = new JSONObject();
             o.put("ok", true);
             o.put("message", "已保存");
+            return Http.Resp.json(o.toString());
+        }
+        if ("/api/maint/cpufreq".equals(path)) {
+            if (!post) {
+                JSONObject o = CpuFreq.info(app);
+                o.put("ok", true);
+                AppConfig cfg = AppConfig.load(app);
+                o.put("enabled", cfg.cpuLimitEnabled);
+                o.put("cpuMaxKhz", cfg.cpuMaxKhz);
+                o.put("cpuMinKhz", cfg.cpuMinKhz);
+                return Http.Resp.json(o.toString());
+            }
+            long max = p.optLong("max", 0);
+            long min = p.optLong("min", 0);
+            boolean auto = p.optBoolean("auto", false);
+            JSONObject o = CpuFreq.apply(app, min, max, auto);
+            if (o.optBoolean("ok")) {
+                JSONObject root = new JSONObject(AppConfig.effectiveJson(app));
+                JSONObject mt = root.optJSONObject("maint");
+                if (mt == null) {
+                    mt = new JSONObject();
+                    root.put("maint", mt);
+                }
+                mt.put("cpuLimitEnabled", auto);
+                mt.put("cpuMaxKhz", max);
+                mt.put("cpuMinKhz", min);
+                root.put("maint", mt);
+                AppConfig.saveEffective(app, root.toString(2));
+                o.put("saved", true);
+            }
             return Http.Resp.json(o.toString());
         }
         if ("/api/maint/cmd".equals(path)) {

@@ -255,6 +255,26 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
       <div class="card"><h3>CPU 与内存</h3><div id="sysCpu"></div></div>
       <div class="card"><h3>温度</h3><div id="sysTemps"></div></div>
     </div>
+    <div class="card" style="margin-top:10px">
+      <h3>CPU 频率限制</h3>
+      <div id="cfInfo" class="hint">读取中…</div>
+      <div class="sep"></div>
+      <div class="grid g3">
+        <label class="fld"><span>最高频率</span><select id="cfMax"></select></label>
+        <label class="fld"><span>最低频率</span><select id="cfMin"></select></label>
+        <label class="fld"><span>持续维持</span>
+          <select id="cfAuto"><option value="1">开启（服务循环校正）</option><option value="0">仅应用一次</option></select></label>
+      </div>
+      <div class="row">
+        <button class="btn primary" onclick="applyCpufreq(this)">应用</button>
+        <button class="btn ghost" onclick="loadCpufreq()">刷新</button>
+        <span class="hint" id="cfHint">走 root 通道写 cpufreq，写入后立即读回校验</span>
+      </div>
+      <div class="hint" style="margin-top:8px">
+        单 policy 管 4 核（写一次全生效），热插拔上线的核沿用限值。「持续维持」在服务循环里
+        定期核对实际值，被 thermal/厂商脚本改回去会自动拉回。锁 998MHz 这类降频档可明显降温，代价是峰值性能。
+      </div>
+    </div>
     <div class="grid g2" style="margin-top:10px">
       <div class="card"><h3>存储</h3><div id="sysStore"></div></div>
       <div class="card"><h3>流量</h3><div id="sysTraffic"></div></div>
@@ -785,7 +805,7 @@ for(var i=0;i<navBtns.length;i++){
 function loadView(v){
   if(v==='overview') loadOverview();
   else if(v==='msgs'){ loadMsgs(); loadConfig(); }
-  else if(v==='sys') loadSys();
+  else if(v==='sys'){ loadSys(); loadCpufreq(); }
   else if(v==='wifi') loadWifi();
   else if(v==='net') loadNet();
   else if(v==='upd') loadUpd();
@@ -1186,6 +1206,51 @@ function loadSys(){
       nt+='<tr><td>'+esc(n.name)+'</td><td class="mono">'+esc(n.ip)+'</td><td class="mono">'+esc(n.mac||'-')+'</td></tr>';
     }
     $('sysNet').innerHTML=nt+'</table>';
+  });
+}
+
+/* ---------- CPU 频率限制 ---------- */
+function fmtFreq(khz){
+  khz=Number(khz)||0;
+  if(khz<=0) return '-';
+  if(khz>=1000000) return (Math.round(khz/10000)/100)+' GHz';
+  return Math.round(khz/1000)+' MHz';
+}
+function fillFreqSel(id, list, selected){
+  var h='', sel=Number(selected)||0;
+  for(var i=0;i<list.length;i++){
+    var v=Number(list[i]);
+    h+='<option value="'+v+'"'+(v===sel?' selected':'')+'>'+fmtFreq(v)+'</option>';
+  }
+  $(id).innerHTML=h;
+}
+function loadCpufreq(){
+  api('GET','/api/maint/cpufreq',null,function(d){
+    if(!d.ok){ $('cfInfo').innerHTML='<span class="chip err">读取失败</span> '+esc(d.message||d.error||''); return; }
+    var av=d.available||[];
+    if(!av.length){ $('cfInfo').innerHTML='<span class="chip err">cpufreq 节点不可读</span>'; return; }
+    var kv2=function(k,v){ return '<div class="kv"><span class="k">'+esc(k)+'</span><span class="v">'+v+'</span></div>'; };
+    $('cfInfo').innerHTML=
+      kv2('当前频率',fmtFreq(d.cur)+' · governor '+esc(d.governor||'-'))+
+      kv2('限值',fmtFreq(d.min)+' ~ '+fmtFreq(d.max)+
+        (d.enabled?' <span class="chip ok">维持中</span>':''))+
+      kv2('核','<span class="mono">'+(d.onlineCores!==undefined?d.onlineCores+' 核在线':'-')+
+        (d.relatedCpus?' · related: '+esc(d.relatedCpus):'')+'</span>');
+    // 有已保存配置就用配置值预选，否则用当前实际值
+    fillFreqSel('cfMax', av, Number(d.cpuMaxKhz)>0?d.cpuMaxKhz:d.max);
+    fillFreqSel('cfMin', av, Number(d.cpuMinKhz)>0?d.cpuMinKhz:d.min);
+    $('cfAuto').value=d.enabled?'1':'0';
+  });
+}
+function applyCpufreq(btn){
+  if(btn) btn.disabled=true;
+  $('cfHint').textContent='应用中…';
+  api('POST','/api/maint/cpufreq',{max:Number($('cfMax').value),min:Number($('cfMin').value),
+    auto:$('cfAuto').value==='1'},function(d){
+    if(btn) btn.disabled=false;
+    $('cfHint').textContent='走 root 通道写 cpufreq，写入后立即读回校验';
+    toast(d.ok?d.message:(d.message||d.error||'失败'), !d.ok);
+    if(d.ok) setTimeout(loadCpufreq, 800);
   });
 }
 

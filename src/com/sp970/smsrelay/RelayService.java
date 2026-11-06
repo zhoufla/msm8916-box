@@ -97,6 +97,8 @@ public class RelayService extends Service {
                 AppConfig cfg = AppConfig.load(this);
                 // SIM 锁（B2 #16）：卡不在白名单且 action=block 时停止转发，消息仍然入库
                 boolean simBlocked = Radio.enforceSimLock(this);
+                // CPU 限频维持：thermal/厂商脚本改回去时拉回（未启用时只是读一个小文件）
+                CpuFreq.enforce(this);
                 List<Deliver> list = db.due(10);
                 if (!list.isEmpty() && cfg.activeCount() > 0 && !simBlocked) {
                     wakelock.acquire(60000);
