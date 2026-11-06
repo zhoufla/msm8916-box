@@ -144,13 +144,12 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
     <nav id="nav">
       <button data-v="overview" class="on">概览</button>
       <button data-v="msgs">短信</button>
-      <button data-v="chs">通道</button>
       <button data-v="wifi">WiFi</button>
       <button data-v="net">蜂窝</button>
       <button data-v="sys">系统</button>
-      <button data-v="upd">升级</button>
       <button data-v="maint">维护</button>
       <button data-v="cmd">命令</button>
+      <button data-v="upd">升级</button>
     </nav>
   </div>
 </header>
@@ -194,7 +193,7 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
     </div>
   </section>
 
-  <!-- 短信：收件 + 发送 + 统计，同类功能合到一个页签 -->
+  <!-- 短信：统计 + 收件 + 发送 + 转发通道（短信功能的延伸） -->
   <section class="view" id="v-msgs">
     <div class="grid g4" style="margin-bottom:10px">
       <div class="card"><h3>待发送</h3><div class="stat" id="stPending">-<small>条</small></div></div>
@@ -227,12 +226,9 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
       <h3>发送记录</h3>
       <div id="outList"><div class="empty">加载中…</div></div>
     </div>
-  </section>
 
-  <!-- 通道：只管转发通道；设备名/面板登录在「维护」页 -->
-  <section class="view" id="v-chs">
-    <div class="card">
-      <h3>转发通道</h3>
+    <div class="card" style="margin-top:12px">
+      <h3>转发通道（收到的短信往哪里投递）</h3>
       <div id="chList"><div class="empty">加载中…</div></div>
       <div class="row" style="margin-top:6px">
         <button class="btn sm" onclick="addChannel('dingtalk')">+ 钉钉</button>
@@ -552,7 +548,7 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
         </div>
         <div class="sep"></div>
         <button class="btn primary" onclick="saveConfig()">保存登录信息</button>
-        <span class="hint" style="margin-left:8px">转发通道在「通道」页，保存的是同一份配置</span>
+        <span class="hint" style="margin-left:8px">转发通道在「短信」页底部，保存的是同一份配置</span>
       </div>
 
       <div class="card">
@@ -782,8 +778,7 @@ for(var i=0;i<navBtns.length;i++){
 }
 function loadView(v){
   if(v==='overview') loadOverview();
-  else if(v==='msgs') loadMsgs();
-  else if(v==='chs') loadConfig();
+  else if(v==='msgs'){ loadMsgs(); loadConfig(); }
   else if(v==='sys') loadSys();
   else if(v==='wifi') loadWifi();
   else if(v==='net') loadNet();
@@ -868,7 +863,7 @@ function loadOverview(){
       chips+='<span class="chip '+(c.active?'ok':'')+'">'+esc(c.name)+' · '+
         (c.type==='dingtalk'?'钉钉':'webhook')+(c.active?'':' · 停用')+'</span>';
     }
-    if(!chips) chips='<span class="hint">还没有配置通道，去「通道」页添加</span>';
+    if(!chips) chips='<span class="hint">还没有配置通道，去「短信」页底部的「转发通道」添加</span>';
     if(d.queue.lastError) chips+='<div class="hint" style="margin-top:8px;color:#f87171">最近错误：'+esc(d.queue.lastError)+'</div>';
     $('chChips').innerHTML=chips;
     if(!d.panel.running){
