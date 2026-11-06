@@ -376,11 +376,14 @@ adb shell am broadcast -a com.sp970.smsrelay.TEST --ez importinbox true
   里 PID 几乎必被复用，只判 `/proc/<pid>` 存在会让 `start.sh` 误判「已有实例」直接退出
   （实测旧 pid 1374 变成了带 androidboot 参数的内核进程）。已改为核对
   `/proc/<pid>/cmdline` 是否真的含 `start.sh` / `httpd` / `crond`，修复后重启验证通过。
-- **热重启后 adbd 假死**：面板 `reboot` / 异常重启后，adbd 仍监听 5555 但对新连接不发
-  CNXN 握手（原始 TCP 实测），kill -9 adbd + `start adbd` 也无效，冷启动（断电重上电）
-  才恢复。期间面板 8080 + relay-helper 就是唯一 root 通道；本次 1.5.0 的「无 adb 部署」
+- **「热重启后 adbd 假死」其实是假象（已修正）**：真正的根源是这台 PC 同时跑了
+  3 个 adb server（Windows 5037、WSL 5038、WSL 5039），热重启后三者同时抢 5555，
+  adbd 先到先得，输家永远 offline；「冷启动能恢复」只是 RNDIS 断开重排了时序，
+  不是冷启动治好了什么。**治本：全机只跑一个 adb server（本项目统一 WSL `-L tcp:5039`）；
+  应急：先 kill 掉其他 adb server 再连，热重启后等 30–60 秒再 connect。**
+  当时在假死状态下用面板 8080 + relay-helper 完成 1.5.0 的「无 adb 部署」
   （APK 分块 base64 经 `/api/maint/cmd` 写入 → sha256 校验 → `pm install -r` + 自动拉起）
-  即在该状态下完成。
+  —— 这条救援通道的价值因此得到实证，保留此记录。
 - **APN 演练用的 ZZ_SMOKE** 已删；factoryReset 演练后配置已从备份恢复并写回
   `/sdcard/smsrelay.conf`（面板保存时若 conf 不存在则只写 prefs，部署/迁移以 conf 为准）。
 
