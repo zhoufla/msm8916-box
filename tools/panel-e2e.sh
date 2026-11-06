@@ -105,6 +105,7 @@ chktrue "/api/radio/simlock ok"    "$WORK/sl.json" "d.get('ok')"
 chktrue "/api/radio 双槽状态数组非空" "$WORK/rd.json" "len(d.get('simSlots') or [])>=1"
 chktrue "/api/radio 槽1 就绪"       "$WORK/rd.json" "(d.get('simSlots') or [''])[0]=='READY'"
 chktrue "/api/radio ICCID 已读出"   "$WORK/rd.json" "len(d.get('iccid') or '')>=10"
+chktrue "/api/radio 驻留小区 PCI 已读出" "$WORK/rd.json" "(d.get('pci') or -1)>=0"
 post /api/netdiag '{"kind":"ping","target":"127.0.0.1","count":2}' nd.json
 chktrue "/api/netdiag ping 回环 ok" "$WORK/nd.json" "d.get('ok')"
 
