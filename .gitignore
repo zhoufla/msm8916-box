@@ -1,0 +1,6 @@
+build/
+dist/
+*.apk
+*.db
+*.log
+local.properties
