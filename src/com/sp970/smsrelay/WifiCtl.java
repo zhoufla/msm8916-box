@@ -9,6 +9,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.FileReader;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -63,6 +64,11 @@ public final class WifiCtl {
             } catch (Throwable ignored) {
             }
             o.put("clientIp", ip);
+            JSONArray ifs = wifiIfaces();
+            o.put("ifaces", ifs);
+            if (ifs.length() == 0 && !Boolean.TRUE.equals(o.opt("ap"))) {
+                o.put("hint", "没有无线网卡（wlan0 不存在），热点由厂商守护进程管理或未启用");
+            }
         } catch (Throwable t) {
             Logs.add("wifi", "state 失败: " + t);
         }
@@ -177,6 +183,10 @@ public final class WifiCtl {
 
     // ---------- 客户端 ----------
 
+    /**
+     * 热点客户端：读 /proc/net/arp，但必须按网卡过滤。
+     * RNDIS/USB 网段同样是 192.168.42.x，不过滤会把插着 USB 的那台电脑当成 WiFi 客户端。
+     */
     public static JSONArray clients() {
         JSONArray arr = new JSONArray();
         BufferedReader r = null;
@@ -185,20 +195,50 @@ public final class WifiCtl {
             String line = r.readLine();          // 表头
             while ((line = r.readLine()) != null) {
                 String[] f = line.trim().split("\\s+");
-                if (f.length < 4) continue;
+                if (f.length < 6) continue;
                 String ip = f[0];
                 String mac = f[3];
+                String dev = f[5];
                 if (!ip.startsWith(HOTSPOT_NET)) continue;
                 if ("00:00:00:00:00:00".equals(mac)) continue;
+                if (!isWifiIface(dev)) continue;
                 JSONObject o = new JSONObject();
                 o.put("ip", ip);
                 o.put("mac", mac);
+                o.put("iface", dev);
                 o.put("flag", f[2]);
                 arr.put(o);
             }
         } catch (Throwable ignored) {
         } finally {
             try { if (r != null) r.close(); } catch (Throwable ignored) {}
+        }
+        return arr;
+    }
+
+    /** wlan0 / ap0 / softap 之类才算热点网卡，rndis0 / rmnet* / usb0 排除。 */
+    private static boolean isWifiIface(String dev) {
+        if (dev == null) return false;
+        String d = dev.toLowerCase();
+        if (d.startsWith("rndis") || d.startsWith("rmnet") || d.startsWith("usb")
+                || d.startsWith("rev_") || d.equals("lo") || d.startsWith("dummy")) {
+            return false;
+        }
+        return d.startsWith("wlan") || d.startsWith("ap") || d.startsWith("softap")
+                || d.startsWith("swlan") || d.startsWith("p2p");
+    }
+
+    /** 当前存在哪些无线网卡，热点起不来时用来判断是没开还是没有模块。 */
+    public static JSONArray wifiIfaces() {
+        JSONArray arr = new JSONArray();
+        File[] ns = new File("/sys/class/net").listFiles();
+        if (ns == null) return arr;
+        for (int i = 0; i < ns.length; i++) {
+            String n = ns[i].getName().toLowerCase();
+            if (n.startsWith("wlan") || n.startsWith("ap") || n.startsWith("p2p")
+                    || n.startsWith("softap")) {
+                arr.put(ns[i].getName());
+            }
         }
         return arr;
     }
@@ -211,7 +251,9 @@ public final class WifiCtl {
         if (w == null) return arr;
         try {
             if (!w.isWifiEnabled()) {
-                Logs.add("wifi", "扫频跳过：station 模式未开启（热点开启时无法扫频）");
+                Logs.add("wifi", wifiIfaces().length() == 0
+                        ? "扫频跳过：本机没有无线网卡（wlan0 不存在）"
+                        : "扫频跳过：station 模式未开启（热点开启时无法扫频）");
                 return arr;
             }
             w.startScan();

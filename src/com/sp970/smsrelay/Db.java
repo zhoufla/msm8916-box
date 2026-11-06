@@ -65,9 +65,21 @@ public final class Db extends SQLiteOpenHelper {
 
     // ---------- 收信 ----------
 
+    /**
+     * 同一条短信的判定窗口。
+     *
+     * 广播路径的 ts 来自短信中心时间戳，从系统收件箱补收时用的是 provider 里的 date，
+     * 两者可能差几秒（实测同一条 10086 回复差了 2 秒），所以只比 peer+body 不够，
+     * 必须给时间戳留余量，否则每次「补收」都会把已转发的短信再转一遍。
+     */
+    private static final long DUP_WINDOW_MS = 90L * 1000L;
+
     /** 入队消息本体，重复则返回已有 id。 */
     public long insertEvent(SmsEvent e) {
         try {
+            long near = findNearDuplicate(e);
+            if (near > 0) return near;
+
             ContentValues v = new ContentValues();
             v.put("hash", e.hash());
             v.put("ts", e.ts);
@@ -87,6 +99,40 @@ public final class Db extends SQLiteOpenHelper {
         } catch (Throwable ignored) {
         }
         return -1;
+    }
+
+    /** 同号码同年内容、时间相差不超过窗口期，视为同一条。 */
+    private long findNearDuplicate(SmsEvent e) {
+        Cursor c = null;
+        try {
+            c = getReadableDatabase().rawQuery(
+                    "SELECT id FROM ev WHERE peer=? AND body=? AND ts BETWEEN ? AND ? " +
+                            "ORDER BY id LIMIT 1",
+                    new String[]{nz(e.peer), nz(e.body),
+                            String.valueOf(e.ts - DUP_WINDOW_MS),
+                            String.valueOf(e.ts + DUP_WINDOW_MS)});
+            if (c.moveToFirst()) return c.getLong(0);
+        } catch (Throwable ignored) {
+        } finally {
+            if (c != null) c.close();
+        }
+        return -1;
+    }
+
+    /**
+     * 清掉指向已不存在事件的投递。
+     * 手工还原数据库、或者写事务被打断时会留下这种行，due() 是 INNER JOIN 取不到它们，
+     * 结果面板上的「待发送」永远清不了。
+     */
+    public int purgeOrphans() {
+        try {
+            int n = getWritableDatabase().delete("dl",
+                    "ev_id NOT IN (SELECT id FROM ev)", null);
+            if (n > 0) Logs.add("db", "清理孤儿投递 " + n + " 条");
+            return n;
+        } catch (Throwable t) {
+            return 0;
+        }
     }
 
     /** 为每个通道建一条投递记录（已存在则跳过）。 */
@@ -198,7 +244,7 @@ public final class Db extends SQLiteOpenHelper {
     }
 
     public int pending() {
-        return count("SELECT COUNT(*) FROM dl WHERE status=0");
+        return count("SELECT COUNT(*) FROM dl d JOIN ev e ON e.id=d.ev_id WHERE d.status=0");
     }
 
     public int sent() {
