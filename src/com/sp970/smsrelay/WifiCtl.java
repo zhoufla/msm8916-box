@@ -28,12 +28,20 @@ import java.util.List;
  *  1. wlan0 是「按需加载」的——WiFi 与热点都关着时 wlan 模块不 insmod，
  *     /sys/class/net 里根本没有 wlan0（只剩 rndis0/rmnet*）。
  *     所以「看不到 wlan0」不等于「没有无线网卡」，判断要看 wlan.ko 是否存在。
- *  2. 单射频，station 与热点不能同时开；开热点前必须先把 station 关掉。
+ *  2. 单射频，station 与热点不能同时开。驱动只有一个模式开关
+ *     /sys/module/wlan/parameters/con_mode（0=STA、1=AP）。实测：热点开着时开 station 被框架
+ *     直接拒绝；station 开着时开热点能成功，但 station 会被强制关掉。
+ *     所以开热点前必须先把 station 关掉，开 station 前必须先关热点。
  *  3. setWifiApEnabled / isWifiApEnabled / getWifiApConfiguration 在 4.4 都是 hidden API，
  *     只能反射。注意 setWifiApEnabled 的签名是 (WifiConfiguration, boolean)——
  *     反射取方法必须带上参数类型，否则 NoSuchMethodException（v1.1 就踩过这个坑）。
  */
 public final class WifiCtl {
+
+    /** 单射频机器上热点占用射频时的统一提示（面板直接 toast 出去，别只说「系统拒绝」）。 */
+    private static final String STA_BUSY_AP =
+            "热点正在占用无线射频，这台机器只有一颗射频、WiFi 和热点不能同时开；请先关掉热点再开 WiFi";
+
 
     private static WifiManager wm(Context ctx) {
         return (WifiManager) ctx.getApplicationContext()
@@ -190,6 +198,11 @@ public final class WifiCtl {
         if ("sta_on".equals(action) || "sta_off".equals(action)) {
             boolean on = "sta_on".equals(action);
             try {
+                // 单射频：热点占着 wlan0 时框架会直接拒绝开 station，先说清楚原因，别只报「系统拒绝」
+                if (on && Boolean.TRUE.equals(apOn(w))) {
+                    Logs.add("wifi", "拒绝开 station：热点正在占用射频");
+                    return result(ctx, w, false, STA_BUSY_AP);
+                }
                 boolean cur = w.isWifiEnabled();
                 if (cur == on) {
                     return result(ctx, w, true, on ? "WiFi 已处于开启状态" : "WiFi 已处于关闭状态");
@@ -199,6 +212,10 @@ public final class WifiCtl {
                 boolean now = w.isWifiEnabled();
                 Logs.add("wifi", (on ? "开启" : "关闭") + " station 模式 now=" + now);
                 if (now != on) {
+                    // 竞态兜底：这期间热点又起来了
+                    if (on && Boolean.TRUE.equals(apOn(w))) {
+                        return result(ctx, w, false, STA_BUSY_AP);
+                    }
                     return result(ctx, w, false, (on ? "开启" : "关闭") + " WiFi 失败：系统拒绝");
                 }
                 String msg = on
@@ -236,7 +253,8 @@ public final class WifiCtl {
             }
 
             // 开热点前必须关掉 station 模式，否则多数 ROM 直接返回 false
-            if (w.isWifiEnabled()) {
+            boolean staWasOn = w.isWifiEnabled();
+            if (staWasOn) {
                 w.setWifiEnabled(false);
                 sleep(1000);
             }
@@ -275,7 +293,9 @@ public final class WifiCtl {
                 return result(ctx, w, false, "系统拒绝开启热点（可能是 ROM 限制或射频被占用）");
             }
             return result(ctx, w, true,
-                    (set ? "热点已更新：" : "热点已开启") + (ssidNow.length() > 0 ? ssidNow : ""));
+                    (set ? "热点已更新：" : "热点已开启")
+                            + (ssidNow.length() > 0 ? ssidNow : "")
+                            + (staWasOn ? "（已自动关闭 WiFi：单射频不能与热点同时使用）" : ""));
         } catch (Throwable t) {
             String e = root(t);
             Logs.add("wifi", "apply 失败: " + e);

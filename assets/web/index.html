@@ -266,6 +266,7 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
         <label class="fld"><span>SSID</span><input id="apSsid" placeholder="热点名称"></label>
         <label class="fld"><span>密码（留空为开放网络）</span><input id="apPass" placeholder="至少 8 位"></label>
         <button class="btn primary" onclick="setAp()">保存并开热点</button>
+        <div class="hint" style="margin-top:8px">开热点会自动关掉当前 WiFi（同一颗射频，两者不能同时用）</div>
       </div>
       <div class="card">
         <h3>无线网卡 / station</h3>
@@ -276,6 +277,7 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
         <div id="staInfo"></div>
         <div class="sep"></div>
         <div id="ifList"></div>
+        <div class="hint" style="margin-top:9px">单射频：WiFi 与热点不能同时开。热点开着时这个开关会被拒绝，先在上面的热点卡片关掉热点</div>
       </div>
       <div class="card">
         <h3>已连接客户端</h3>
@@ -384,7 +386,7 @@ function reloadAll(){ loadView(state.view); }
 /* ---------- 概览 ---------- */
 function loadOverview(){
   api('GET','/api/status',null,function(d){
-    if(!d.ok){ $('devSub').textContent='面板异常：'+(d.error||''); $('liveDot').className='dot off'; return; }
+    if(!d.ok){ $('devSub').textContent='面板异常：'+(d.message||d.error||''); $('liveDot').className='dot off'; return; }
     state.status=d;
     $('devName').textContent=d.device||d.model;
     $('devSub').innerHTML='<span class="dot"></span>'+esc(d.model)+' · Android '+esc(d.android)+' · 已运行 '+esc(d.uptime);
@@ -435,7 +437,7 @@ function loadOverview(){
 /* ---------- 短信 ---------- */
 function loadMsgs(){
   api('GET','/api/messages?limit=50',null,function(d){
-    if(!d.ok){ $('msgList').innerHTML='<div class="empty">'+esc(d.error||'读取失败')+'</div>'; return; }
+    if(!d.ok){ $('msgList').innerHTML='<div class="empty">'+esc(d.message||d.error||'读取失败')+'</div>'; return; }
     var h='';
     for(var i=0;i<d.messages.length;i++){
       var m=d.messages[i], chs='';
@@ -461,7 +463,7 @@ function loadMsgs(){
 }
 function retryMsg(id){
   api('POST','/api/messages/retry',{id:id},function(d){
-    toast(d.ok?d.message:(d.error||'失败'), !d.ok); loadMsgs();
+    toast(d.ok?d.message:(d.message||d.error||'失败'), !d.ok); loadMsgs();
   });
 }
 function copyText(t){
@@ -474,12 +476,12 @@ function copyText(t){
 }
 function importInbox(){
   api('POST','/api/inbox/import',{},function(d){
-    toast(d.ok?d.message:(d.error||'失败'), !d.ok); loadMsgs();
+    toast(d.ok?d.message:(d.message||d.error||'失败'), !d.ok); loadMsgs();
   });
 }
 function injectTest(){
   api('POST','/api/messages/test',{peer:'10086',body:'面板测试消息 '+new Date().toLocaleTimeString()},
-    function(d){ toast(d.ok?d.message:(d.error||'失败'), !d.ok); setTimeout(loadMsgs,800); });
+    function(d){ toast(d.ok?d.message:(d.message||d.error||'失败'), !d.ok); setTimeout(loadMsgs,800); });
 }
 
 /* ---------- 发送 ---------- */
@@ -489,7 +491,7 @@ function doSend(btn){
   if(btn) btn.disabled=true;
   api('POST','/api/send',{to:to,body:body},function(d){
     if(btn) btn.disabled=false;
-    toast(d.ok?d.message:(d.error||'发送失败'), !d.ok);
+    toast(d.ok?d.message:(d.message||d.error||'发送失败'), !d.ok);
     if(d.ok){ $('sendBody').value=''; $('sendHint').textContent='已提交 #'+d.id;
       setTimeout(loadOutbox,1200); }
   });
@@ -515,7 +517,7 @@ function loadOutbox(){
 /* ---------- 通道 ---------- */
 function loadConfig(){
   api('GET','/api/config',null,function(d){
-    if(!d.ok){ toast(d.error||'读取配置失败', true); return; }
+    if(!d.ok){ toast(d.message||d.error||'读取配置失败', true); return; }
     try{ state.cfg=JSON.parse(d.json); }catch(e){ state.cfg={device:'',web:{},channels:[]}; }
     if(!state.cfg.channels) state.cfg.channels=[];
     state.cfg.web={enabled:d.web.enabled, port:d.web.port, user:d.web.user, pass:d.web.pass};
@@ -620,7 +622,7 @@ function saveConfig(){
   // 清掉本地标记字段
   for(var i=0;i<cfg.channels.length;i++) delete cfg.channels[i].__dirty;
   api('POST','/api/config',cfg,function(d){
-    toast(d.ok?d.message:(d.error||'保存失败'), !d.ok);
+    toast(d.ok?d.message:(d.message||d.error||'保存失败'), !d.ok);
     if(d.ok&&d.restarted){
       var cur=location.port||'80', np=String(d.port||'');
       if(np&&np!==cur){
@@ -639,7 +641,7 @@ function saveConfig(){
 /* ---------- 系统 ---------- */
 function loadSys(){
   api('GET','/api/sys',null,function(d){
-    if(!d.ok){ toast(d.error||'读取失败', true); return; }
+    if(!d.ok){ toast(d.message||d.error||'读取失败', true); return; }
     state.sys=d;
     var b=d.battery||{}, s=d.signal||{}, m=d.memory||{}, t=d.traffic||{};
     $('sysHw').innerHTML=
@@ -683,7 +685,7 @@ function loadSys(){
 /* ---------- WiFi ---------- */
 function loadWifi(){
   api('GET','/api/wifi',null,function(d){
-    if(!d.ok){ toast(d.error||'读取失败', true); return; }
+    if(!d.ok){ toast(d.message||d.error||'读取失败', true); return; }
     var s=d.state||{}, ap=(s.ap===true), sta=(s.wifiOn===true), st=s.station||{};
 
     $('swAp').className='sw'+(ap?' on':'');
@@ -737,7 +739,7 @@ function toggleAp(){
   var on=$('swAp').className.indexOf('on')>=0;
   $('apHint').textContent='正在'+(on?'关闭':'开启')+'…';
   api('POST','/api/wifi',{action:on?'ap_off':'ap_on'},function(d){
-    toast(d.ok?d.message:(d.error||'失败'), !d.ok); setTimeout(loadWifi,1200);
+    toast(d.ok?d.message:(d.message||d.error||'失败'), !d.ok); setTimeout(loadWifi,1200);
   });
 }
 function setAp(){
@@ -745,20 +747,20 @@ function setAp(){
   if(!ssid){ toast('SSID 不能为空', true); return; }
   if(pass&&pass.length<8){ toast('WPA2 密码至少 8 位', true); return; }
   api('POST','/api/wifi',{action:'ap_set',ssid:ssid,pass:pass},function(d){
-    toast(d.ok?d.message:(d.error||'失败'), !d.ok); setTimeout(loadWifi,1500);
+    toast(d.ok?d.message:(d.message||d.error||'失败'), !d.ok); setTimeout(loadWifi,1500);
   });
 }
 function toggleSta(){
   var on=$('swSta').className.indexOf('on')>=0;
   $('staHint').textContent='正在'+(on?'关闭':'开启')+'…';
   api('POST','/api/wifi',{action:on?'sta_off':'sta_on'},function(d){
-    toast(d.ok?d.message:(d.error||'失败'), !d.ok); setTimeout(loadWifi,1500);
+    toast(d.ok?d.message:(d.message||d.error||'失败'), !d.ok); setTimeout(loadWifi,1500);
   });
 }
 function scanWifi(){
   $('scanList').innerHTML='<div class="hint">扫描中，约 3 秒…</div>';
   api('GET','/api/wifi/scan',null,function(d){
-    if(!d.ok){ $('scanList').innerHTML='<div class="hint">'+esc(d.error||'扫描失败')+'</div>'; return; }
+    if(!d.ok){ $('scanList').innerHTML='<div class="hint">'+esc(d.message||d.error||'扫描失败')+'</div>'; return; }
     var arr=d.list||[];
     if(!arr.length){ $('scanList').innerHTML='<div class="hint">'+esc(d.hint||'没扫到任何网络')+'</div>'; return; }
     var h='<table><tr><th>SSID</th><th>信号</th><th>信道</th></tr>';
