@@ -13,8 +13,8 @@
 |---|---|
 | `SmsReceiver` | 监听 `SMS_RECEIVED`（优先级 999），不抢占默认短信 App，4.4 收到广播即转发 |
 | `RelayService` | 常驻前台服务：扫库 → 多通道并发投递 → 标记成功/失败；同时托管 Web 面板 |
-| `Db` | SQLite 三表：`ev`（收信本体，hash 去重）+ `dl`（消息×通道投递状态，退避 1/2/4/8/16/30min）+ `out`（发件记录） |
-| `Sender` | 钉钉（text + 可选 SEC 加签）/ 通用 webhook（JSON + 可选 X-Token），UTF-8 |
+| `Db` | SQLite 三表：`ev`（收信本体，hash 去重）+ `dl`（消息×通道投递状态，退避 1/2/4/8/16/30min，上限按通道配置）+ `out`（发件记录） |
+| `Sender` | 钉钉（text 或 markdown 卡片，可选 SEC 加签）/ 通用 webhook（JSON + 可选 X-Token），多设备标签，UTF-8 |
 | `SmsSender` / `SendReceiver` | 面板发短信：分片发送，逐片回写结果 |
 | `Inbox` | 补收：把系统收件箱里漏转发的短信补进队列 |
 | `AppConfig` | 配置优先级：`/sdcard/smsrelay.conf`（JSON）> SharedPreferences > 内置示例 |
@@ -34,6 +34,22 @@
 ```
 
 验证码类短信自动提取 4~8 位数字进 `code` 字段。
+
+### 通道字段
+
+| 字段 | 说明 |
+|---|---|
+| `name` | 唯一标识，投递记录按它区分 |
+| `type` | `dingtalk` / `webhook` |
+| `url` | 必须 http(s) 开头；为空则该通道不投递 |
+| `secret` | 钉钉加签（SEC 开头），配了才带 timestamp/sign |
+| `token` | webhook 的 `X-Token` 请求头 |
+| `prefix` | 正文前缀，钉钉「自定义关键词」安全设置靠它过校验 |
+| `format` | 钉钉专用：`text`（默认）/ `markdown` 卡片 |
+| `title` | markdown 卡片标题，空则自动「短信 · 设备 · 号码」 |
+| `tag` | 多设备标签：写进钉钉前缀与 webhook 载荷，多台棒子共用一个机器人时区分来源 |
+| `maxTries` | 该通道失败重试上限（1~50，默认 10） |
+| `enabled` | 是否启用 |
 
 ## Web 面板
 
@@ -99,6 +115,17 @@ adb push config/smsrelay.conf /sdcard/smsrelay.conf
 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`，需先 `adb uninstall`（会清掉 `relay.db` 历史，
 `/sdcard/smsrelay.conf` 不受影响）。
 
+### 装完自检
+
+```sh
+sh tools/smoke-test.sh 192.168.42.129:8080 admin:admin
+# 想顺带验真发短信，再加一个收件号码
+sh tools/smoke-test.sh 192.168.42.129:8080 admin:admin 10086
+```
+
+脚本会逐项打面板接口（无凭据 401、首页、status/sys/messages/outbox/config/logs/wifi、
+注入测试消息、补收），最后汇总通过/失败项。
+
 ## 调试通道（无屏利器）
 
 ```sh
@@ -130,7 +157,7 @@ adb shell am broadcast -a com.sp970.smsrelay.TEST --ez importinbox true
 - [x] **短信发送**：面板写短信 → SmsManager 发送 → 发送结果回显
 - [x] **系统信息**：信号/电量/流量/存储/uptime（App 内 getprop+dumpsys 直读）
 - [x] **WiFi 控制**：热点启停、SSID/密码修改、客户端列表、扫频
-- [ ] 钉钉 markdown 卡片消息、多设备标签、webhook 通道重试策略独立配置
+- [x] 钉钉 markdown 卡片消息、多设备标签（`tag`）、webhook 通道重试策略独立配置（`maxTries`）
 - [ ] 面板访问令牌（免 Basic 弹窗，方便嵌到其他系统）
 - [ ] 短信规则：关键字/号码白名单过滤，验证码单独走低延迟通道
 - [ ] 定时任务：定时重启热点、定时补收、低电量告警
@@ -144,5 +171,5 @@ msm8916-box/
 ├── src/com/sp970/smsrelay/    # 21 个类，无第三方依赖，无 res/
 ├── assets/web/index.html      # 面板单页（aapt -A assets 打包）
 ├── config/smsrelay.conf.example
-└── tools/                     # 镜像离线定制脚本（flash 前用）
+└── tools/                     # smoke-test.sh 自检；patch-*.sh 镜像离线定制
 ```

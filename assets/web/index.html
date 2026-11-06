@@ -282,10 +282,18 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
   <h4 id="mTitle">编辑通道</h4>
   <label class="fld"><span>名称（唯一，用于标识投递记录）</span><input id="mName"></label>
   <label class="fld"><span>类型</span>
-    <select id="mType"><option value="dingtalk">钉钉机器人</option><option value="webhook">通用 Webhook</option></select>
+    <select id="mType" onchange="syncFormatUI()"><option value="dingtalk">钉钉机器人</option><option value="webhook">通用 Webhook</option></select>
   </label>
   <label class="fld"><span>URL</span><input id="mUrl" placeholder="https://oapi.dingtalk.com/robot/send?access_token=..."></label>
   <label class="fld"><span>消息前缀（钉钉关键词校验用）</span><input id="mPrefix" placeholder="设备：158\n来自："></label>
+  <label class="fld"><span>设备标签（多台设备共用一个机器人时用来区分，可空）</span><input id="mTag" placeholder="客厅-158"></label>
+  <div class="grid g2">
+    <label class="fld"><span>钉钉消息格式</span>
+      <select id="mFormat" onchange="syncFormatUI()"><option value="text">纯文本</option><option value="markdown">Markdown 卡片</option></select>
+    </label>
+    <label class="fld"><span>失败重试上限（次）</span><input id="mMaxTries" type="number" min="1" max="50" value="10"></label>
+  </div>
+  <label class="fld" id="mTitleWrap"><span>卡片标题（留空自动生成）</span><input id="mCardTitle" placeholder="短信 · 设备 · 号码"></label>
   <label class="fld"><span>加签密钥 SEC（钉钉，可空）</span><input id="mSecret"></label>
   <label class="fld"><span>X-Token（webhook，可空）</span><input id="mToken"></label>
   <div class="row">
@@ -512,10 +520,13 @@ function loadConfig(){
 function renderChannels(){
   var cs=state.cfg.channels, h='';
   for(var i=0;i<cs.length;i++){
-    var c=cs[i];
+    var c=cs[i], extra='';
+    if(c.tag) extra+='<span class="chip acc" style="margin-left:4px">'+esc(c.tag)+'</span>';
+    if(c.type==='dingtalk'&&c.format==='markdown') extra+='<span class="chip" style="margin-left:4px">卡片</span>';
+    if(c.maxTries&&c.maxTries!==10) extra+='<span class="chip wait" style="margin-left:4px">重试 '+c.maxTries+' 次</span>';
     h+='<div class="chitem"><div class="sw '+(c.enabled?'on':'')+'" onclick="toggleCh('+i+')"><i></i></div>'+
       '<div class="meta"><div class="nm">'+esc(c.name||('通道'+(i+1)))+
-      ' <span class="chip" style="margin-left:4px">'+(c.type==='dingtalk'?'钉钉':'webhook')+'</span></div>'+
+      ' <span class="chip" style="margin-left:4px">'+(c.type==='dingtalk'?'钉钉':'webhook')+'</span>'+extra+'</div>'+
       '<div class="url">'+esc(c.url||'（未填 URL，不会投递）')+'</div></div>'+
       '<div class="row"><button class="btn sm ghost" onclick="editCh('+i+')">编辑</button>'+
       '<button class="btn sm danger" onclick="delCh('+i+')">删除</button></div></div>';
@@ -549,8 +560,19 @@ function editCh(i){
   $('mTitle').textContent='编辑通道 · '+(c.name||('#'+(i+1)));
   $('mName').value=c.name||''; $('mType').value=c.type||'webhook';
   $('mUrl').value=c.url||''; $('mPrefix').value=c.prefix||'';
-  $('mSecret').value=c.secret||''; $('mToken').value=c.token||'';
+  $('mTag').value=c.tag||'';
+  $('mFormat').value=(c.format==='markdown'?'markdown':'text');
+  $('mCardTitle').value=c.title||'';
+  $('mMaxTries').value=c.maxTries||10;
+  syncFormatUI();
   $('modal').className='modal on';
+}
+function syncFormatUI(){
+  var isDt=($('mType').value==='dingtalk');
+  var md=isDt&&$('mFormat').value==='markdown';
+  var fmtLabel=$('mFormat').parentNode;
+  fmtLabel.style.display=isDt?'':'none';
+  $('mTitleWrap').style.display=md?'':'none';
 }
 function closeModal(){ $('modal').className='modal'; state.editIdx=-1; }
 function applyChannel(){
@@ -559,6 +581,17 @@ function applyChannel(){
   c.name=$('mName').value.trim(); c.type=$('mType').value;
   c.url=$('mUrl').value.trim(); c.prefix=$('mPrefix').value;
   c.secret=$('mSecret').value; c.token=$('mToken').value;
+  var tag=$('mTag').value.trim();
+  if(tag) c.tag=tag; else delete c.tag;
+  if(c.type==='dingtalk'&&$('mFormat').value==='markdown'){
+    c.format='markdown';
+    var t=$('mCardTitle').value.trim();
+    if(t) c.title=t; else delete c.title;
+  }else{
+    delete c.format; delete c.title;
+  }
+  var mt=parseInt($('mMaxTries').value,10);
+  if(mt>=1&&mt<=50&&mt!==10) c.maxTries=mt; else delete c.maxTries;
   if(!c.name){ toast('名称不能为空', true); return; }
   closeModal(); renderChannels();
 }
