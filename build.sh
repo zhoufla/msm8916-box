@@ -14,12 +14,13 @@ for f in "$PLATFORM" "$BT/aapt" "$BT/d8" "$BT/zipalign" "$BT/apksigner"; do
 done
 
 APP=com.sp970.smsrelay
+VER=1.1
 OUT=dist
 rm -rf build "$OUT"
 mkdir -p build/classes build/dex "$OUT"
 
-echo "== 1/6 生成未签名骨架（manifest 编译成二进制 XML）"
-aapt package -f -M AndroidManifest.xml -I "$PLATFORM" -F build/base.apk \
+echo "== 1/6 生成未签名骨架（manifest + assets 网页）"
+aapt package -f -M AndroidManifest.xml -A assets -I "$PLATFORM" -F build/base.apk \
     --min-sdk-version 19 --target-sdk-version 19
 
 echo "== 2/6 编译 Java"
@@ -57,8 +58,8 @@ if [ ! -e debug.keystore ]; then
     echo "   已生成 debug.keystore"
 fi
 apksigner sign --ks debug.keystore --ks-pass pass:sp970sp970 \
-    --key-pass pass:sp970sp970 --out "$OUT/$APP-1.0.apk" build/aligned.apk
+    --key-pass pass:sp970sp970 --out "$OUT/$APP-$VER.apk" build/aligned.apk
 
-apksigner verify --print-certs "$OUT/$APP-1.0.apk" | head -5
-ls -lh "$OUT/$APP-1.0.apk"
+apksigner verify --print-certs "$OUT/$APP-$VER.apk" | head -5
+ls -lh "$OUT/$APP-$VER.apk"
 echo "完成"

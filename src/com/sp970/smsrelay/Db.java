@@ -6,19 +6,37 @@ import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 
 /**
- * 消息表 ev + 投递表 dl。
- *
- * 一条短信对应多个通道各一条 dl，某通道失败不影响其它通道，
- * 失败通道按自己的退避节奏重试。
+ * 三张表：
+ *   ev  收到的短信本体（hash 去重）
+ *   dl  消息 × 通道 的投递状态，各自退避重试
+ *   out 从面板发出的短信（含发送结果）
  */
 public final class Db extends SQLiteOpenHelper {
 
     private static final String NAME = "relay.db";
-    private static final int VER = 2;
+    private static final int VER = 3;
+
+    private static final String CREATE_EV =
+            "CREATE TABLE IF NOT EXISTS ev (id INTEGER PRIMARY KEY AUTOINCREMENT," +
+                    "hash TEXT UNIQUE, ts INTEGER, peer TEXT, body TEXT, code TEXT)";
+    private static final String CREATE_DL =
+            "CREATE TABLE IF NOT EXISTS dl (id INTEGER PRIMARY KEY AUTOINCREMENT," +
+                    "ev_id INTEGER, ch TEXT, status INTEGER DEFAULT 0, tries INTEGER DEFAULT 0," +
+                    "next_at INTEGER DEFAULT 0, err TEXT DEFAULT '', UNIQUE(ev_id, ch))";
+    private static final String CREATE_OUT =
+            "CREATE TABLE IF NOT EXISTS out (id INTEGER PRIMARY KEY AUTOINCREMENT," +
+                    "ts INTEGER, peer TEXT, body TEXT, parts INTEGER DEFAULT 1," +
+                    "status INTEGER DEFAULT 0, err TEXT DEFAULT '')";
 
     public Db(Context c) {
         super(c, NAME, null, VER);
@@ -26,22 +44,26 @@ public final class Db extends SQLiteOpenHelper {
 
     @Override
     public void onCreate(SQLiteDatabase db) {
-        db.execSQL("CREATE TABLE ev (id INTEGER PRIMARY KEY AUTOINCREMENT," +
-                "hash TEXT UNIQUE, ts INTEGER, peer TEXT, body TEXT, code TEXT)");
-        db.execSQL("CREATE TABLE dl (id INTEGER PRIMARY KEY AUTOINCREMENT," +
-                "ev_id INTEGER, ch TEXT, status INTEGER DEFAULT 0, tries INTEGER DEFAULT 0," +
-                "next_at INTEGER DEFAULT 0, err TEXT DEFAULT '', UNIQUE(ev_id, ch))");
-        db.execSQL("CREATE INDEX idx_dl ON dl(status, next_at)");
+        db.execSQL(CREATE_EV);
+        db.execSQL(CREATE_DL);
+        db.execSQL(CREATE_OUT);
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_dl ON dl(status, next_at)");
     }
 
     @Override
     public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
         if (oldVersion < 2) {
+            // v1 结构差别太大，历史无保留价值
             db.execSQL("DROP TABLE IF EXISTS ev");
             db.execSQL("DROP TABLE IF EXISTS dl");
+            db.execSQL("DROP TABLE IF EXISTS out");
             onCreate(db);
+            return;
         }
+        if (oldVersion < 3) db.execSQL(CREATE_OUT);
     }
+
+    // ---------- 收信 ----------
 
     /** 入队消息本体，重复则返回已有 id。 */
     public long insertEvent(SmsEvent e) {
@@ -140,12 +162,50 @@ public final class Db extends SQLiteOpenHelper {
         }
     }
 
+    /** 面板「重发」：把该消息所有失败/放弃的投递重置为待发，立即重试。 */
+    public int retryEvent(long evId) {
+        try {
+            ContentValues v = new ContentValues();
+            v.put("status", 0);
+            v.put("tries", 0);
+            v.put("next_at", 0);
+            v.put("err", "");
+            return getWritableDatabase().update("dl", v, "ev_id=? AND status<>1",
+                    new String[]{String.valueOf(evId)});
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    /** 面板重发时补充新加的通道（配置里后来才加的通道也能收历史消息）。 */
+    public void retryEventWithChannels(long evId, List<String> channels) {
+        ensureDeliveries(evId, channels);
+        try {
+            ContentValues v = new ContentValues();
+            v.put("status", 0);
+            v.put("tries", 0);
+            v.put("next_at", 0);
+            v.put("err", "");
+            getWritableDatabase().update("dl", v, "ev_id=? AND status<>1",
+                    new String[]{String.valueOf(evId)});
+        } catch (Throwable ignored) {
+        }
+    }
+
     public int pending() {
         return count("SELECT COUNT(*) FROM dl WHERE status=0");
     }
 
     public int sent() {
         return count("SELECT COUNT(*) FROM dl WHERE status=1");
+    }
+
+    public int failed() {
+        return count("SELECT COUNT(*) FROM dl WHERE status=2");
+    }
+
+    public int events() {
+        return count("SELECT COUNT(*) FROM ev");
     }
 
     private int count(String sql) {
@@ -173,7 +233,111 @@ public final class Db extends SQLiteOpenHelper {
         return "";
     }
 
-    /** 已完成的记录保留 3 天。 */
+    /** 面板用：最近的收信 + 每个通道的投递状态。 */
+    public JSONArray recentJson(int limit) {
+        JSONArray arr = new JSONArray();
+        Cursor c = null;
+        try {
+            c = getReadableDatabase().rawQuery(
+                    "SELECT id,ts,peer,body,code FROM ev ORDER BY id DESC LIMIT " + limit, null);
+            while (c.moveToNext()) {
+                JSONObject o = new JSONObject();
+                long id = c.getLong(0);
+                long ts = c.getLong(1);
+                o.put("id", id);
+                o.put("ts", ts);
+                o.put("iso", iso(ts));
+                o.put("peer", nz(c.getString(2)));
+                o.put("body", nz(c.getString(3)));
+                o.put("code", nz(c.getString(4)));
+                o.put("deliveries", deliveries(id));
+                arr.put(o);
+            }
+        } catch (Throwable ignored) {
+        } finally {
+            if (c != null) c.close();
+        }
+        return arr;
+    }
+
+    private JSONArray deliveries(long evId) {
+        JSONArray arr = new JSONArray();
+        Cursor c = null;
+        try {
+            c = getReadableDatabase().rawQuery(
+                    "SELECT ch,status,tries,err,next_at FROM dl WHERE ev_id=? ORDER BY id",
+                    new String[]{String.valueOf(evId)});
+            while (c.moveToNext()) {
+                JSONObject o = new JSONObject();
+                o.put("ch", nz(c.getString(0)));
+                o.put("status", c.getInt(1));       // 0 待发 / 1 已送达 / 2 放弃
+                o.put("tries", c.getInt(2));
+                o.put("err", nz(c.getString(3)));
+                o.put("next_at", c.getLong(4));
+                arr.put(o);
+            }
+        } catch (Throwable ignored) {
+        } finally {
+            if (c != null) c.close();
+        }
+        return arr;
+    }
+
+    // ---------- 发信 ----------
+
+    public long insertOut(String peer, String body, int parts) {
+        try {
+            ContentValues v = new ContentValues();
+            v.put("ts", System.currentTimeMillis());
+            v.put("peer", peer);
+            v.put("body", body);
+            v.put("parts", parts);
+            v.put("status", 0);
+            return getWritableDatabase().insert("out", null, v);
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+
+    /** status: 1 已发出，2 失败。 */
+    public void markOut(long id, int status, String err) {
+        try {
+            ContentValues v = new ContentValues();
+            v.put("status", status);
+            v.put("err", err == null ? "" : (err.length() > 200 ? err.substring(0, 200) : err));
+            getWritableDatabase().update("out", v, "id=?", new String[]{String.valueOf(id)});
+        } catch (Throwable ignored) {
+        }
+    }
+
+    public JSONArray outboxJson(int limit) {
+        JSONArray arr = new JSONArray();
+        Cursor c = null;
+        try {
+            c = getReadableDatabase().rawQuery(
+                    "SELECT id,ts,peer,body,parts,status,err FROM out ORDER BY id DESC LIMIT "
+                            + limit, null);
+            while (c.moveToNext()) {
+                JSONObject o = new JSONObject();
+                long ts = c.getLong(1);
+                o.put("id", c.getLong(0));
+                o.put("ts", ts);
+                o.put("iso", iso(ts));
+                o.put("peer", nz(c.getString(2)));
+                o.put("body", nz(c.getString(3)));
+                o.put("parts", c.getInt(4));
+                o.put("status", c.getInt(5));
+                o.put("err", nz(c.getString(6)));
+                arr.put(o);
+            }
+        } catch (Throwable ignored) {
+        } finally {
+            if (c != null) c.close();
+        }
+        return arr;
+    }
+
+    /** 已完成的接收记录保留 3 天；发件记录同样保留 3 天。 */
     public void prune() {
         try {
             long cut = System.currentTimeMillis() - 3L * 24 * 3600 * 1000;
@@ -182,7 +346,17 @@ public final class Db extends SQLiteOpenHelper {
                     new String[]{String.valueOf(cut)});
             db.delete("ev", "ts<? AND id NOT IN (SELECT ev_id FROM dl WHERE status=0)",
                     new String[]{String.valueOf(cut)});
+            db.delete("out", "ts<? AND status<>0", new String[]{String.valueOf(cut)});
         } catch (Throwable ignored) {
         }
+    }
+
+    private static String iso(long ts) {
+        return new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA)
+                .format(new Date(ts > 0 ? ts : System.currentTimeMillis()));
+    }
+
+    private static String nz(String s) {
+        return s == null ? "" : s;
     }
 }

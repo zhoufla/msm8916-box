@@ -1,0 +1,478 @@
+package com.sp970.smsrelay;
+
+import android.content.Context;
+import android.os.Build;
+import android.os.Environment;
+import android.os.SystemClock;
+import android.util.Base64;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.InputStream;
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * 内嵌 Web 面板：HTTP 服务 + 静态页面 + JSON API。
+ * 默认 8080 端口，HTTP Basic 鉴权（账号密码写在配置的 web 段）。
+ */
+public final class WebPanel {
+
+    private static final Object LOCK = new Object();
+    private static volatile WebPanel instance;
+    private static final Map<String, byte[]> ASSETS = new HashMap<String, byte[]>();
+
+    /** 请求都转给当前实例，方便改端口后原地重启。 */
+    private static final Http.Handler FORWARD = new Http.Handler() {
+        @Override
+        public Http.Resp serve(Http.Req req) throws Exception {
+            WebPanel w = instance;
+            if (w == null) return Http.Resp.error(503, "面板未就绪");
+            return w.route(req);
+        }
+    };
+
+    private final Context app;
+    private final Http http;
+    private final String user;
+    private final String pass;
+
+    private WebPanel(Context app, Http http, String user, String pass) {
+        this.app = app;
+        this.http = http;
+        this.user = user;
+        this.pass = pass;
+    }
+
+    // ---------- 生命周期 ----------
+
+    /** @return 给日志看的结果描述 */
+    public static String start(Context ctx) {
+        synchronized (LOCK) {
+            if (instance != null) return "面板已在 " + instance.port() + " 端口运行";
+            AppConfig cfg = AppConfig.load(ctx);
+            if (!cfg.webEnabled) {
+                Logs.add("panel", "配置里 web.enabled=false，面板不启动");
+                return "面板已禁用";
+            }
+            int base = cfg.webPort > 0 ? cfg.webPort : 8080;
+            for (int i = 0; i < 6; i++) {
+                int p = base + i;
+                Http h = new Http(p, FORWARD);
+                if (h.start()) {
+                    instance = new WebPanel(ctx.getApplicationContext(), h,
+                            cfg.webUser, cfg.webPass);
+                    Logs.add("panel", "面板已启动，端口 " + h.port()
+                            + (p != base ? "（" + base + " 被占用，顺延）" : ""));
+                    return "面板已启动，端口 " + h.port();
+                }
+            }
+            Logs.add("panel", "面板启动失败：端口 " + base + "~" + (base + 5) + " 均被占用");
+            return "面板启动失败：端口被占用";
+        }
+    }
+
+    public static void stop() {
+        synchronized (LOCK) {
+            WebPanel w = instance;
+            instance = null;
+            if (w != null) {
+                w.http.stop();
+                Logs.add("panel", "面板已停止");
+            }
+        }
+    }
+
+    public static String restart(Context ctx) {
+        stop();
+        try { Thread.sleep(200); } catch (InterruptedException ignored) {}
+        return start(ctx);
+    }
+
+    public static boolean isRunning() {
+        return instance != null && instance.http.isRunning();
+    }
+
+    public static int runningPort() {
+        WebPanel w = instance;
+        return w == null ? 0 : w.http.port();
+    }
+
+    private int port() {
+        return http.port();
+    }
+
+    // ---------- 路由 ----------
+
+    private Http.Resp route(Http.Req req) throws Exception {
+        if (!authorized(req)) {
+            Http.Resp r = Http.Resp.error(401, "需要登录");
+            r.headers.put("WWW-Authenticate", "Basic realm=\"msm8916-box\"");
+            return r;
+        }
+
+        String p = req.path;
+        if (p == null || p.length() == 0) p = "/";
+
+        if ("/".equals(p) || "/index.html".equals(p)) {
+            return asset("web/index.html", "text/html; charset=utf-8");
+        }
+        if ("/favicon.ico".equals(p)) {
+            return Http.Resp.text(204, "image/x-icon", "");
+        }
+        if (p.startsWith("/api/")) {
+            try {
+                return api(req, p);
+            } catch (IllegalArgumentException e) {
+                return Http.Resp.error(400, e.getMessage());
+            } catch (Throwable t) {
+                Logs.add("panel", "API " + p + " 异常: " + t);
+                return Http.Resp.error(500, t.getClass().getSimpleName() + ": " + t.getMessage());
+            }
+        }
+        return Http.Resp.error(404, "没有这个页面");
+    }
+
+    private boolean authorized(Http.Req req) {
+        String h = req.headers.get("authorization");
+        if (h == null || h.length() < 7) return false;
+        if (!h.toLowerCase().startsWith("basic ")) return false;
+        try {
+            String raw = new String(Base64.decode(h.substring(6).trim(), Base64.DEFAULT), "UTF-8");
+            int c = raw.indexOf(':');
+            if (c < 0) return false;
+            return raw.substring(0, c).equals(user) && raw.substring(c + 1).equals(pass);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private Http.Resp api(Http.Req req, String path) throws Exception {
+        boolean post = "POST".equals(req.method);
+        JSONObject p = params(req);
+
+        if ("/api/status".equals(path)) return Http.Resp.json(status(p).toString());
+        if ("/api/sys".equals(path)) return Http.Resp.json(sys());
+        if ("/api/logs".equals(path)) return Http.Resp.json(logs(p));
+        if ("/api/messages".equals(path)) return Http.Resp.json(messages(p));
+        if ("/api/outbox".equals(path)) return Http.Resp.json(outbox(p));
+        if ("/api/config".equals(path)) return post ? saveConfig(req) : loadConfig();
+
+        if ("/api/messages/retry".equals(path)) {
+            if (!post) throw new IllegalArgumentException("需要 POST");
+            return Http.Resp.json(retry(p));
+        }
+        if ("/api/messages/test".equals(path)) {
+            if (!post) throw new IllegalArgumentException("需要 POST");
+            return Http.Resp.json(inject(p));
+        }
+        if ("/api/inbox/import".equals(path)) {
+            if (!post) throw new IllegalArgumentException("需要 POST");
+            int n = Inbox.importAll(app);
+            RelayService.wake(app);
+            JSONObject o = new JSONObject();
+            o.put("ok", true);
+            o.put("added", n);
+            o.put("message", "补收完成，新增 " + n + " 条");
+            return Http.Resp.json(o.toString());
+        }
+        if ("/api/send".equals(path)) {
+            if (!post) throw new IllegalArgumentException("需要 POST");
+            return Http.Resp.json(send(p));
+        }
+        if ("/api/wifi".equals(path)) {
+            return post ? Http.Resp.json(wifiApply(p)) : Http.Resp.json(wifiState());
+        }
+        if ("/api/wifi/scan".equals(path)) {
+            JSONObject o = new JSONObject();
+            o.put("ok", true);
+            o.put("list", WifiCtl.scan(app));
+            return Http.Resp.json(o.toString());
+        }
+        return Http.Resp.error(404, "没有这个接口: " + path);
+    }
+
+    // ---------- 各接口 ----------
+
+    private JSONObject status(JSONObject p) throws Exception {
+        AppConfig cfg = AppConfig.load(app);
+        Db db = new Db(app);
+        long up = SystemClock.elapsedRealtime();
+
+        JSONObject o = new JSONObject();
+        o.put("ok", true);
+        o.put("device", cfg.device);
+        o.put("model", Build.MODEL);
+        o.put("android", Build.VERSION.RELEASE);
+        o.put("uptime", SysInfo.uptimeText(up));
+        o.put("uptimeMs", up);
+
+        JSONObject panel = new JSONObject();
+        panel.put("running", isRunning());
+        panel.put("port", runningPort());
+        panel.put("user", user);
+        o.put("panel", panel);
+
+        JSONArray chs = new JSONArray();
+        for (int i = 0; i < cfg.channels.size(); i++) {
+            Channel c = cfg.channels.get(i);
+            JSONObject x = new JSONObject();
+            x.put("name", c.name);
+            x.put("type", c.type);
+            x.put("enabled", c.enabled);
+            x.put("active", c.valid());
+            x.put("host", hostOf(c.url));
+            chs.put(x);
+        }
+        o.put("channels", chs);
+        o.put("activeChannels", cfg.activeCount());
+
+        JSONObject q = new JSONObject();
+        q.put("pending", db.pending());
+        q.put("sent", db.sent());
+        q.put("failed", db.failed());
+        q.put("events", db.events());
+        q.put("lastError", db.lastError());
+        o.put("queue", q);
+
+        o.put("battery", new JSONObject().put("percent", SysInfo.batteryPercent(app)));
+        o.put("signal", new JSONObject().put("level", SysInfo.signalLevel()));
+        o.put("webEnabled", cfg.webEnabled);
+        return o;
+    }
+
+    private String sys() throws Exception {
+        AppConfig cfg = AppConfig.load(app);
+        JSONObject o = SysInfo.snapshot(app, cfg);
+        o.put("ok", true);
+        o.put("panel", new JSONObject().put("running", isRunning())
+                .put("port", runningPort()));
+        return o.toString();
+    }
+
+    private String logs(JSONObject p) throws Exception {
+        JSONObject o = new JSONObject();
+        o.put("ok", true);
+        o.put("logs", Logs.json(p.optInt("limit", 80)));
+        return o.toString();
+    }
+
+    private String messages(JSONObject p) throws Exception {
+        int limit = p.optInt("limit", 50);
+        if (limit < 1) limit = 1;
+        if (limit > 300) limit = 300;
+        JSONObject o = new JSONObject();
+        o.put("ok", true);
+        o.put("messages", new Db(app).recentJson(limit));
+        return o.toString();
+    }
+
+    private String outbox(JSONObject p) throws Exception {
+        int limit = p.optInt("limit", 30);
+        if (limit < 1) limit = 1;
+        if (limit > 200) limit = 200;
+        JSONObject o = new JSONObject();
+        o.put("ok", true);
+        o.put("messages", new Db(app).outboxJson(limit));
+        return o.toString();
+    }
+
+    private Http.Resp loadConfig() throws Exception {
+        AppConfig cfg = AppConfig.load(app);
+        File f = new File(Environment.getExternalStorageDirectory(), AppConfig.CONF_NAME);
+        JSONObject o = new JSONObject();
+        o.put("ok", true);
+        o.put("json", AppConfig.effectiveJson(app));
+        o.put("port", runningPort());
+        o.put("running", isRunning());
+        o.put("file", f.getAbsolutePath());
+        o.put("fileExists", f.exists());
+        o.put("web", new JSONObject().put("enabled", cfg.webEnabled)
+                .put("port", cfg.webPort).put("user", cfg.webUser).put("pass", cfg.webPass));
+        return Http.Resp.json(o.toString());
+    }
+
+    private Http.Resp saveConfig(Http.Req req) throws Exception {
+        String body = req.body == null ? "" : req.body.trim();
+        if (!body.startsWith("{")) throw new IllegalArgumentException("配置必须是 JSON 对象");
+        JSONObject root = new JSONObject(body);
+        JSONArray arr = root.optJSONArray("channels");
+        if (arr == null) throw new IllegalArgumentException("缺少 channels 数组");
+
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject c = arr.optJSONObject(i);
+            if (c == null) throw new IllegalArgumentException("channels[" + i + "] 不是对象");
+            String name = c.optString("name", "");
+            String url = c.optString("url", "");
+            String type = c.optString("type", "webhook");
+            if (name.length() == 0) throw new IllegalArgumentException("第 " + (i + 1) + " 个通道缺少 name");
+            if (!"dingtalk".equalsIgnoreCase(type) && !"webhook".equalsIgnoreCase(type)) {
+                throw new IllegalArgumentException("通道 " + name + " 的 type 只能是 dingtalk / webhook");
+            }
+            if (url.length() > 0 && !url.startsWith("http")) {
+                throw new IllegalArgumentException("通道 " + name + " 的 url 不是 http 开头");
+            }
+        }
+
+        AppConfig old = AppConfig.load(app);
+        AppConfig.saveEffective(app, body);
+        AppConfig now = AppConfig.load(app);
+        RelayService.wake(app);
+
+        boolean needRestart = old.webPort != now.webPort
+                || old.webEnabled != now.webEnabled
+                || !old.webUser.equals(now.webUser)
+                || !old.webPass.equals(now.webPass);
+
+        String msg = "配置已保存";
+        if (needRestart) {
+            msg = WebPanel.restart(app);
+            needRestart = true;
+        }
+
+        JSONObject o = new JSONObject();
+        o.put("ok", true);
+        o.put("message", msg);
+        o.put("restarted", needRestart);
+        o.put("port", runningPort());
+        o.put("activeChannels", now.activeCount());
+        return Http.Resp.json(o.toString());
+    }
+
+    private String send(JSONObject p) throws Exception {
+        String to = p.optString("to", "").trim();
+        String body = p.optString("body", "");
+        long id;
+        try {
+            id = SmsSender.send(app, to, body);
+        } catch (Exception e) {
+            throw new IllegalArgumentException(e.getMessage());
+        }
+        JSONObject o = new JSONObject();
+        o.put("ok", true);
+        o.put("id", id);
+        o.put("message", "已提交发送，稍后刷新看结果");
+        return o.toString();
+    }
+
+    private String retry(JSONObject p) throws Exception {
+        long id = p.optLong("id", 0);
+        if (id <= 0) throw new IllegalArgumentException("缺少消息 id");
+        AppConfig cfg = AppConfig.load(app);
+        Db db = new Db(app);
+        db.retryEventWithChannels(id, cfg.names());
+        RelayService.wake(app);
+        JSONObject o = new JSONObject();
+        o.put("ok", true);
+        o.put("message", "已重新入队，稍后刷新");
+        return o.toString();
+    }
+
+    private String inject(JSONObject p) throws Exception {
+        AppConfig cfg = AppConfig.load(app);
+        SmsEvent e = new SmsEvent();
+        e.ts = System.currentTimeMillis();
+        e.peer = p.optString("peer", "10086");
+        e.body = p.optString("body", "面板测试消息 " + e.ts);
+        e.code = SmsEvent.extractCode(e.body);
+        Db db = new Db(app);
+        long id = db.insertEvent(e);
+        db.ensureDeliveries(id, cfg.names());
+        RelayService.wake(app);
+        Logs.add("panel", "注入测试消息 evId=" + id + " 通道=" + cfg.names());
+        JSONObject o = new JSONObject();
+        o.put("ok", true);
+        o.put("id", id);
+        o.put("message", "已注入，通道数 " + cfg.names().size());
+        return o.toString();
+    }
+
+    private String wifiState() throws Exception {
+        JSONObject o = new JSONObject();
+        o.put("ok", true);
+        o.put("state", WifiCtl.state(app));
+        return o.toString();
+    }
+
+    private String wifiApply(JSONObject p) throws Exception {
+        String action = p.optString("action", "");
+        String ssid = p.optString("ssid", "");
+        String pass = p.optString("pass", "");
+        String msg = WifiCtl.apply(app, action, ssid, pass);
+        JSONObject o = new JSONObject();
+        o.put("ok", true);
+        o.put("message", msg);
+        o.put("state", WifiCtl.state(app));
+        return o.toString();
+    }
+
+    // ---------- 工具 ----------
+
+    private static JSONObject params(Http.Req req) {
+        JSONObject o = new JSONObject();
+        try {
+            String b = req.body == null ? "" : req.body.trim();
+            if (b.startsWith("{")) {
+                JSONObject j = new JSONObject(b);
+                java.util.Iterator<String> it = j.keys();
+                while (it.hasNext()) {
+                    String k = it.next();
+                    o.put(k, j.opt(k));
+                }
+                return o;
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            for (Map.Entry<String, String> e : req.form.entrySet()) o.put(e.getKey(), e.getValue());
+            for (Map.Entry<String, String> e : req.query.entrySet()) {
+                if (!o.has(e.getKey())) o.put(e.getKey(), e.getValue());
+            }
+        } catch (Throwable ignored) {
+        }
+        return o;
+    }
+
+    private Http.Resp asset(String name, String ct) {
+        byte[] cached;
+        synchronized (ASSETS) {
+            cached = ASSETS.get(name);
+        }
+        if (cached == null) {
+            InputStream in = null;
+            try {
+                in = app.getAssets().open(name);
+                ByteArrayOutputStream bo = new ByteArrayOutputStream();
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+                cached = bo.toByteArray();
+                synchronized (ASSETS) {
+                    ASSETS.put(name, cached);
+                }
+            } catch (Throwable t) {
+                Logs.add("panel", "静态资源缺失: " + name + " " + t);
+                return Http.Resp.error(500, "页面资源缺失: " + name);
+            } finally {
+                try { if (in != null) in.close(); } catch (Throwable ignored) {}
+            }
+        }
+        Http.Resp r = Http.Resp.bytes(ct, cached);
+        r.headers.put("Content-Encoding", "identity");
+        return r;
+    }
+
+    private static String hostOf(String url) {
+        try {
+            int s = url.indexOf("://");
+            if (s < 0) return "";
+            int e = url.indexOf('/', s + 3);
+            return e < 0 ? url.substring(s + 3) : url.substring(s + 3, e);
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+}

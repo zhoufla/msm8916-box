@@ -12,7 +12,7 @@ import android.os.PowerManager;
 import java.util.List;
 
 /**
- * 常驻转发服务（多通道）。
+ * 常驻服务：短信转发 + 内嵌 Web 面板。
  *
  * 保活手段（Android 4.4 没有 Doze，也不需要 JobScheduler）：
  *  1. startForeground 常驻通知，避开 LMK 的普通进程优先级
@@ -33,6 +33,14 @@ public class RelayService extends Service {
     private Db db;
     private PowerManager.WakeLock wakelock;
 
+    /** 面板上的操作（重发/补收/改配置）后立刻踢一轮投递，不必等轮询间隔。 */
+    public static void wake(Context ctx) {
+        try {
+            ctx.startService(new Intent(ctx, RelayService.class));
+        } catch (Throwable ignored) {
+        }
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -41,6 +49,9 @@ public class RelayService extends Service {
         wakelock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "smsrelay:send");
         wakelock.setReferenceCounted(false);
         startForeground(NOTI_ID, buildNotification("等待短信"));
+        Logs.add("svc", "服务启动");
+        SysInfo.listen(this);
+        WebPanel.start(this);
         worker = new Thread(new Runnable() {
             @Override
             public void run() {
@@ -68,6 +79,9 @@ public class RelayService extends Service {
     @Override
     public void onDestroy() {
         running = false;
+        WebPanel.stop();
+        SysInfo.unlisten(this);
+        Logs.add("svc", "服务销毁");
         synchronized (lock) {
             lock.notifyAll();
         }
@@ -94,13 +108,12 @@ public class RelayService extends Service {
                             String err = Sender.send(ch, d, cfg.device);
                             if (err == null) {
                                 db.markOk(d.dlId);
-                                android.util.Log.i("SmsRelay", "ok ch=" + ch.name
-                                        + " peer=" + d.peer);
+                                Logs.add("relay", "送达 " + ch.name + " ← " + d.peer);
                                 sent++;
                             } else {
                                 db.markFail(d.dlId, d.tries, err);
-                                android.util.Log.w("SmsRelay", "fail ch=" + ch.name
-                                        + " tries=" + (d.tries + 1) + " err=" + err);
+                                Logs.add("relay", "失败 " + ch.name + " 第 " + (d.tries + 1)
+                                        + " 次：" + err);
                             }
                         }
                     } finally {
@@ -133,7 +146,8 @@ public class RelayService extends Service {
         } catch (Throwable ignored) {
         }
         String text = (pending > 0 ? ("待发送 " + pending) : "已就绪")
-                + " · 通道 " + active;
+                + " · 通道 " + active
+                + (WebPanel.isRunning() ? " · 面板 " + WebPanel.runningPort() : "");
         try {
             startForeground(NOTI_ID, buildNotification(text));
         } catch (Throwable ignored) {

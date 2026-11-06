@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="theme-color" content="#0e1420">
+<title>MSM8916 Box 控制台</title>
+<style>
+:root{
+  --bg:#0e1420; --panel:#161f2e; --panel2:#1c2739; --line:#26334a;
+  --txt:#e7eefb; --dim:#8b9cb8; --accent:#2dd4bf; --accent2:#38bdf8;
+  --ok:#34d399; --warn:#fbbf24; --err:#f87171;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0}
+body{
+  background:radial-gradient(1200px 600px at 20% -10%,#17263c 0%,var(--bg) 55%) fixed;
+  color:var(--txt); font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  min-height:100vh; padding-bottom:40px;
+}
+a{color:var(--accent2);text-decoration:none}
+.wrap{max-width:1080px;margin:0 auto;padding:0 14px}
+header{position:sticky;top:0;z-index:20;backdrop-filter:blur(10px);
+  background:rgba(14,20,32,.86);border-bottom:1px solid var(--line)}
+.hd{display:flex;align-items:center;gap:12px;padding:12px 0}
+.logo{width:34px;height:34px;border-radius:10px;flex:0 0 auto;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  display:flex;align-items:center;justify-content:center;font-weight:700;color:#08131f;font-size:15px}
+.hd h1{margin:0;font-size:15px;font-weight:600;letter-spacing:.3px}
+.hd .sub{font-size:11px;color:var(--dim);margin-top:1px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--ok);display:inline-block;
+  margin-right:5px;box-shadow:0 0 0 3px rgba(52,211,153,.15)}
+.dot.off{background:var(--err);box-shadow:0 0 0 3px rgba(248,113,113,.15)}
+nav{display:flex;gap:4px;overflow-x:auto;padding-bottom:8px;scrollbar-width:none}
+nav::-webkit-scrollbar{display:none}
+nav button{flex:0 0 auto;background:transparent;border:1px solid transparent;color:var(--dim);
+  padding:6px 12px;border-radius:9px;font-size:13px;cursor:pointer}
+nav button.on{background:var(--panel2);border-color:var(--line);color:var(--txt)}
+nav button:hover{color:var(--txt)}
+.view{display:none;padding-top:14px}
+.view.on{display:block}
+.grid{display:grid;gap:10px}
+.g4{grid-template-columns:repeat(4,1fr)}
+.g2{grid-template-columns:repeat(2,1fr)}
+.g3{grid-template-columns:repeat(3,1fr)}
+@media(max-width:760px){.g4{grid-template-columns:repeat(2,1fr)}.g2,.g3{grid-template-columns:1fr}}
+.card{background:linear-gradient(180deg,var(--panel),rgba(22,31,46,.75));
+  border:1px solid var(--line);border-radius:14px;padding:14px}
+.card h3{margin:0 0 10px;font-size:13px;font-weight:600;color:var(--dim);letter-spacing:.4px;
+  text-transform:uppercase}
+.stat{font-size:26px;font-weight:700;letter-spacing:-.5px}
+.stat small{font-size:12px;color:var(--dim);font-weight:400;margin-left:3px}
+.kv{display:flex;justify-content:space-between;gap:10px;padding:5px 0;font-size:13px;
+  border-bottom:1px dashed rgba(38,51,74,.7)}
+.kv:last-child{border-bottom:0}
+.kv .k{color:var(--dim);flex:0 0 auto}
+.kv .v{text-align:right;word-break:break-all;font-variant-numeric:tabular-nums}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
+.chip{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;
+  font-size:11.5px;border:1px solid var(--line);background:var(--panel2);color:var(--dim)}
+.chip.ok{color:var(--ok);border-color:rgba(52,211,153,.35);background:rgba(52,211,153,.08)}
+.chip.err{color:var(--err);border-color:rgba(248,113,113,.35);background:rgba(248,113,113,.08)}
+.chip.wait{color:var(--warn);border-color:rgba(251,191,36,.35);background:rgba(251,191,36,.08)}
+.chip.acc{color:var(--accent);border-color:rgba(45,212,191,.35);background:rgba(45,212,191,.08)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  background:var(--panel2);border:1px solid var(--line);color:var(--txt);
+  padding:8px 14px;border-radius:10px;font-size:13px;cursor:pointer;transition:.15s}
+.btn:hover{border-color:#3a4b68;background:#22304a}
+.btn.primary{background:linear-gradient(135deg,var(--accent),#1fb6c9);color:#06202a;border:0;font-weight:600}
+.btn.primary:hover{filter:brightness(1.08)}
+.btn.ghost{background:transparent}
+.btn.danger{color:var(--err);border-color:rgba(248,113,113,.3)}
+.btn.sm{padding:5px 10px;font-size:12px;border-radius:8px}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+input,select,textarea{background:#0f1826;border:1px solid var(--line);color:var(--txt);
+  border-radius:10px;padding:9px 11px;font-size:13px;width:100%;font-family:inherit}
+input:focus,select:focus,textarea:focus{outline:0;border-color:var(--accent2)}
+textarea{resize:vertical;min-height:74px}
+label.fld{display:block;margin-bottom:9px}
+label.fld span{display:block;font-size:11.5px;color:var(--dim);margin-bottom:4px}
+.row{display:flex;gap:9px;flex-wrap:wrap;align-items:center}
+.row>.grow{flex:1 1 160px}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.msg{border:1px solid var(--line);border-radius:12px;padding:11px 12px;margin-bottom:9px;
+  background:var(--panel)}
+.msg .top{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--dim);
+  margin-bottom:5px;flex-wrap:wrap}
+.msg .peer{color:var(--accent2);font-weight:600;font-size:13px}
+.msg .body{white-space:pre-wrap;word-break:break-word;font-size:13.5px;margin:3px 0 7px}
+.msg .acts{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.empty{color:var(--dim);font-size:13px;text-align:center;padding:22px 0}
+.bar{height:6px;border-radius:4px;background:#0f1826;overflow:hidden;margin-top:5px}
+.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2))}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th,td{text-align:left;padding:6px 4px;border-bottom:1px solid rgba(38,51,74,.65)}
+th{color:var(--dim);font-weight:500;font-size:11.5px}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+.sw{position:relative;width:42px;height:23px;border-radius:12px;background:#22304a;
+  border:1px solid var(--line);cursor:pointer;flex:0 0 auto;transition:.2s}
+.sw i{position:absolute;top:2px;left:2px;width:17px;height:17px;border-radius:50%;
+  background:#64748b;transition:.2s}
+.sw.on{background:rgba(45,212,191,.25);border-color:rgba(45,212,191,.5)}
+.sw.on i{left:20px;background:var(--accent)}
+.chitem{border:1px solid var(--line);border-radius:12px;padding:11px 12px;margin-bottom:9px;
+  background:var(--panel);display:flex;gap:10px;align-items:flex-start}
+.chitem .meta{flex:1 1 auto;min-width:0}
+.chitem .nm{font-weight:600;font-size:13.5px}
+.chitem .url{font-size:11.5px;color:var(--dim);word-break:break-all;margin-top:2px}
+.modal{position:fixed;inset:0;background:rgba(5,9,15,.72);display:none;align-items:center;
+  justify-content:center;z-index:50;padding:16px}
+.modal.on{display:flex}
+.modal .box{background:var(--panel);border:1px solid var(--line);border-radius:16px;
+  padding:16px;width:100%;max-width:460px;max-height:88vh;overflow:auto}
+.modal h4{margin:0 0 12px;font-size:14px}
+#toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);
+  background:#1f2c42;border:1px solid var(--line);color:var(--txt);padding:9px 16px;
+  border-radius:11px;font-size:13px;opacity:0;pointer-events:none;transition:.22s;z-index:60;
+  max-width:88vw;box-shadow:0 10px 30px rgba(0,0,0,.4)}
+#toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+#toast.err{border-color:rgba(248,113,113,.5);color:#ffd9d9}
+.tabs2{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+.sep{height:1px;background:var(--line);margin:12px 0}
+.hint{font-size:11.5px;color:var(--dim);line-height:1.6}
+.logline{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;color:var(--dim);
+  padding:3px 0;border-bottom:1px dashed rgba(38,51,74,.5);word-break:break-all}
+.logline b{color:var(--accent);font-weight:500}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="hd">
+      <div class="logo">89</div>
+      <div style="flex:1 1 auto;min-width:0">
+        <h1 id="devName">MSM8916 Box</h1>
+        <div class="sub"><span class="dot" id="liveDot"></span><span id="devSub">连接中…</span></div>
+      </div>
+      <button class="btn sm ghost" onclick="reloadAll()">刷新</button>
+    </div>
+    <nav id="nav">
+      <button data-v="overview" class="on">概览</button>
+      <button data-v="msgs">短信</button>
+      <button data-v="send">发送</button>
+      <button data-v="chs">通道</button>
+      <button data-v="sys">系统</button>
+      <button data-v="wifi">WiFi</button>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap">
+  <!-- 概览 -->
+  <section class="view on" id="v-overview">
+    <div class="grid g4" style="margin-bottom:10px">
+      <div class="card"><h3>待发送</h3><div class="stat" id="stPending">-<small>条</small></div></div>
+      <div class="card"><h3>已送达</h3><div class="stat" id="stSent">-<small>条</small></div></div>
+      <div class="card"><h3>已放弃</h3><div class="stat" id="stFail">-<small>条</small></div></div>
+      <div class="card"><h3>累计收信</h3><div class="stat" id="stEv">-<small>条</small></div></div>
+    </div>
+    <div class="grid g2">
+      <div class="card">
+        <h3>设备</h3>
+        <div id="devInfo"></div>
+      </div>
+      <div class="card">
+        <h3>网络与电源</h3>
+        <div id="devNet"></div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:10px">
+      <h3>启用中的通道</h3>
+      <div class="row" id="chChips"><span class="hint">加载中…</span></div>
+    </div>
+    <div class="card" style="margin-top:10px">
+      <h3>最近日志</h3>
+      <div id="miniLogs"><div class="empty">加载中…</div></div>
+    </div>
+  </section>
+
+  <!-- 短信 -->
+  <section class="view" id="v-msgs">
+    <div class="toolbar">
+      <button class="btn sm" onclick="loadMsgs()">刷新</button>
+      <button class="btn sm" onclick="importInbox()">补收系统收件箱</button>
+      <button class="btn sm" onclick="injectTest()">注入测试消息</button>
+      <span class="hint" style="flex:1 1 200px;text-align:right">最近 50 条，含各通道投递状态</span>
+    </div>
+    <div id="msgList"><div class="empty">加载中…</div></div>
+  </section>
+
+  <!-- 发送 -->
+  <section class="view" id="v-send">
+    <div class="card">
+      <h3>发短信</h3>
+      <label class="fld"><span>接收号码</span><input id="sendTo" placeholder="10086 或 13800138000"></label>
+      <label class="fld"><span>内容</span><textarea id="sendBody" placeholder="短信内容，超长自动分片"></textarea></label>
+      <div class="row">
+        <button class="btn primary" onclick="doSend(this)">发送</button>
+        <button class="btn ghost" onclick="document.getElementById('sendBody').value=''">清空</button>
+        <span class="hint" id="sendHint"></span>
+      </div>
+    </div>
+    <div class="card" style="margin-top:10px">
+      <h3>发送记录</h3>
+      <div id="outList"><div class="empty">加载中…</div></div>
+    </div>
+  </section>
+
+  <!-- 通道 -->
+  <section class="view" id="v-chs">
+    <div class="card">
+      <h3>设备与面板</h3>
+      <div class="grid g2">
+        <label class="fld"><span>设备名（消息前缀用）</span><input id="cfgDevice"></label>
+        <label class="fld"><span>面板端口</span><input id="cfgPort" type="number" min="1" max="65535"></label>
+        <label class="fld"><span>面板账号</span><input id="cfgUser"></label>
+        <label class="fld"><span>面板密码</span><input id="cfgPass" type="password"></label>
+      </div>
+      <div class="row">
+        <div class="sw" id="swWeb" onclick="toggleWeb()"><i></i></div>
+        <span class="hint">面板随服务启动（改端口/账号后保存会重启面板）</span>
+      </div>
+    </div>
+    <div class="card" style="margin-top:10px">
+      <h3>转发通道</h3>
+      <div id="chList"><div class="empty">加载中…</div></div>
+      <div class="row" style="margin-top:6px">
+        <button class="btn sm" onclick="addChannel('dingtalk')">+ 钉钉</button>
+        <button class="btn sm" onclick="addChannel('webhook')">+ Webhook</button>
+        <span style="flex:1 1 auto"></span>
+        <button class="btn primary" onclick="saveConfig()">保存配置</button>
+      </div>
+      <div class="sep"></div>
+      <div class="hint">保存后立即生效：新消息按新通道投递；改端口/账号会自动重启面板，页面需用新地址重新打开。</div>
+    </div>
+    <div class="card" style="margin-top:10px">
+      <h3>配置文件</h3>
+      <div id="cfgFile" class="hint">加载中…</div>
+    </div>
+  </section>
+
+  <!-- 系统 -->
+  <section class="view" id="v-sys">
+    <div class="grid g2">
+      <div class="card"><h3>硬件</h3><div id="sysHw"></div></div>
+      <div class="card"><h3>系统</h3><div id="sysOs"></div></div>
+    </div>
+    <div class="grid g2" style="margin-top:10px">
+      <div class="card"><h3>存储</h3><div id="sysStore"></div></div>
+      <div class="card"><h3>流量与内存</h3><div id="sysTraffic"></div></div>
+    </div>
+    <div class="card" style="margin-top:10px"><h3>网卡</h3><div id="sysNet"></div></div>
+  </section>
+
+  <!-- WiFi -->
+  <section class="view" id="v-wifi">
+    <div class="grid g2">
+      <div class="card">
+        <h3>热点</h3>
+        <div class="row" style="margin-bottom:10px">
+          <div class="sw" id="swAp" onclick="toggleAp()"><i></i></div>
+          <span class="hint" id="apHint">读取中…</span>
+        </div>
+        <div id="apInfo"></div>
+        <div class="sep"></div>
+        <label class="fld"><span>SSID</span><input id="apSsid" placeholder="热点名称"></label>
+        <label class="fld"><span>密码（留空为开放网络）</span><input id="apPass" placeholder="至少 8 位"></label>
+        <button class="btn primary" onclick="setAp()">保存并开热点</button>
+      </div>
+      <div class="card">
+        <h3>已连接客户端</h3>
+        <div id="apClients"><div class="empty">加载中…</div></div>
+        <div class="sep"></div>
+        <button class="btn sm" onclick="scanWifi()">扫描周边 WiFi</button>
+        <div id="scanList" style="margin-top:9px"></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="modal" id="modal"><div class="box">
+  <h4 id="mTitle">编辑通道</h4>
+  <label class="fld"><span>名称（唯一，用于标识投递记录）</span><input id="mName"></label>
+  <label class="fld"><span>类型</span>
+    <select id="mType"><option value="dingtalk">钉钉机器人</option><option value="webhook">通用 Webhook</option></select>
+  </label>
+  <label class="fld"><span>URL</span><input id="mUrl" placeholder="https://oapi.dingtalk.com/robot/send?access_token=..."></label>
+  <label class="fld"><span>消息前缀（钉钉关键词校验用）</span><input id="mPrefix" placeholder="设备：158\n来自："></label>
+  <label class="fld"><span>加签密钥 SEC（钉钉，可空）</span><input id="mSecret"></label>
+  <label class="fld"><span>X-Token（webhook，可空）</span><input id="mToken"></label>
+  <div class="row">
+    <button class="btn primary" onclick="applyChannel()">确定</button>
+    <button class="btn ghost" onclick="closeModal()">取消</button>
+  </div>
+</div></div>
+<div id="toast"></div>
+
+<script>
+var state = {status:null, sys:null, cfg:null, cfgRaw:'', view:'overview', editIdx:-1, busy:false};
+
+function $(id){ return document.getElementById(id); }
+function esc(s){
+  if(s===null||s===undefined) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
+function toast(msg, isErr){
+  var t=$('toast'); t.textContent=msg; t.className='on'+(isErr?' err':'');
+  clearTimeout(t._h); t._h=setTimeout(function(){ t.className=''; },2600);
+}
+function api(method, path, body, cb){
+  var x=new XMLHttpRequest();
+  x.open(method, path, true);
+  x.setRequestHeader('Content-Type','application/json');
+  x.onreadystatechange=function(){
+    if(x.readyState!==4) return;
+    var d;
+    try{ d=JSON.parse(x.responseText); }
+    catch(e){ d={ok:false, error:'HTTP '+x.status+' '+x.responseText.slice(0,120)}; }
+    if(x.status===401){ toast('登录失效，请刷新页面重新登录', true); }
+    cb(d, x.status);
+  };
+  try{ x.send(body?JSON.stringify(body):null); }
+  catch(e){ cb({ok:false,error:''+e}, 0); }
+}
+function fmtBytes(n){
+  n=Number(n)||0;
+  if(n<1024) return n+' B';
+  if(n<1048576) return (n/1024).toFixed(1)+' KB';
+  if(n<1073741824) return (n/1048576).toFixed(1)+' MB';
+  return (n/1073741824).toFixed(2)+' GB';
+}
+function fmtTime(ts){
+  if(!ts) return '-';
+  var d=new Date(ts), p=function(n){return n<10?'0'+n:n;};
+  return (d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes());
+}
+function kv(k,v){ return '<div class="kv"><span class="k">'+esc(k)+'</span><span class="v">'+v+'</span></div>'; }
+
+/* ---------- 视图切换 ---------- */
+var navBtns=document.querySelectorAll('#nav button');
+for(var i=0;i<navBtns.length;i++){
+  navBtns[i].onclick=function(){
+    var v=this.getAttribute('data-v');
+    var bs=document.querySelectorAll('#nav button');
+    for(var j=0;j<bs.length;j++) bs[j].className=(bs[j]===this?'on':'');
+    var vs=document.querySelectorAll('.view');
+    for(var k=0;k<vs.length;k++) vs[k].className='view'+(vs[k].id==='v-'+v?' on':'');
+    state.view=v; loadView(v);
+  };
+}
+function loadView(v){
+  if(v==='overview') loadOverview();
+  else if(v==='msgs') loadMsgs();
+  else if(v==='send') loadOutbox();
+  else if(v==='chs') loadConfig();
+  else if(v==='sys') loadSys();
+  else if(v==='wifi') loadWifi();
+}
+function reloadAll(){ loadView(state.view); }
+
+/* ---------- 概览 ---------- */
+function loadOverview(){
+  api('GET','/api/status',null,function(d){
+    if(!d.ok){ $('devSub').textContent='面板异常：'+(d.error||''); $('liveDot').className='dot off'; return; }
+    state.status=d;
+    $('devName').textContent=d.device||d.model;
+    $('devSub').innerHTML='<span class="dot"></span>'+esc(d.model)+' · Android '+esc(d.android)+' · 已运行 '+esc(d.uptime);
+    $('stPending').innerHTML=(d.queue.pending)+'<small>条</small>';
+    $('stSent').innerHTML=(d.queue.sent)+'<small>条</small>';
+    $('stFail').innerHTML=(d.queue.failed)+'<small>条</small>';
+    $('stEv').innerHTML=(d.queue.events)+'<small>条</small>';
+    var chips='';
+    for(var i=0;i<d.channels.length;i++){
+      var c=d.channels[i];
+      chips+='<span class="chip '+(c.active?'ok':'')+'">'+esc(c.name)+' · '+
+        (c.type==='dingtalk'?'钉钉':'webhook')+(c.active?'':' · 停用')+'</span>';
+    }
+    if(!chips) chips='<span class="hint">还没有配置通道，去「通道」页添加</span>';
+    if(d.queue.lastError) chips+='<div class="hint" style="margin-top:8px;color:#f87171">最近错误：'+esc(d.queue.lastError)+'</div>';
+    $('chChips').innerHTML=chips;
+    if(!d.panel.running){
+      $('chChips').innerHTML+='<div class="hint" style="margin-top:8px;color:#fbbf24">面板进程状态异常，重启服务试试</div>';
+    }
+  });
+  api('GET','/api/sys',null,function(d){
+    if(!d.ok) return;
+    state.sys=d;
+    var b=d.battery||{}, s=d.signal||{};
+    $('devInfo').innerHTML=
+      kv('设备名',esc(d.device))+
+      kv('型号',esc(d.model)+' / '+esc(d.brand))+
+      kv('基带',esc(d.baseband||'-'))+
+      kv('序列号',esc(d.serial||'-'))+
+      kv('运行时长',esc(d.uptime));
+    $('devNet').innerHTML=
+      kv('运营商',esc(d.operator||'-'))+kv('服务状态',esc(d.service||'-'))+
+      kv('SIM',esc(d.sim||'-'))+kv('网络',esc(d.netType||'-'))+
+      kv('信号',(s.dbm?s.dbm+' dBm':'未知')+' <span class="chip '+(s.level>=3?'ok':s.level>0?'wait':'err')+'">'+esc(s.text||'')+'</span>')+
+      kv('电量',(b.percent>=0?b.percent+'%':'未知')+' · '+esc(b.status||'')+' · '+esc(b.plugged||''));
+  });
+  api('GET','/api/logs?limit=8',null,function(d){
+    if(!d.ok) return;
+    var h='';
+    for(var i=0;i<d.logs.length;i++){
+      var l=d.logs[i];
+      h+='<div class="logline"><b>'+esc(l.t)+'</b> ['+esc(l.tag)+'] '+esc(l.msg)+'</div>';
+    }
+    $('miniLogs').innerHTML=h||'<div class="empty">还没有日志</div>';
+  });
+}
+
+/* ---------- 短信 ---------- */
+function loadMsgs(){
+  api('GET','/api/messages?limit=50',null,function(d){
+    if(!d.ok){ $('msgList').innerHTML='<div class="empty">'+esc(d.error||'读取失败')+'</div>'; return; }
+    var h='';
+    for(var i=0;i<d.messages.length;i++){
+      var m=d.messages[i], chs='';
+      for(var j=0;j<m.deliveries.length;j++){
+        var dl=m.deliveries[j];
+        var cls=dl.status===1?'ok':dl.status===2?'err':'wait';
+        var txt=dl.status===1?'已送达':dl.status===2?'放弃':'待发送';
+        var tip=dl.status===0&&dl.next_at>Date.now()?('重试于 '+fmtTime(dl.next_at)):(dl.err||'');
+        chs+='<span class="chip '+cls+'" title="'+esc(tip)+'">'+esc(dl.ch)+' · '+txt+
+          (dl.tries>0?' ('+dl.tries+')':'')+'</span>';
+      }
+      h+='<div class="msg"><div class="top"><span><span class="peer">'+esc(m.peer||'(未知)')+
+        '</span> <span class="mono">'+esc(m.iso)+'</span></span>'+
+        (m.code?'<span class="chip acc">验证码 '+esc(m.code)+'</span>':'')+'</div>'+
+        '<div class="body">'+esc(m.body)+'</div>'+
+        '<div class="acts">'+chs+
+        (m.code?'<button class="btn sm ghost" onclick="copyText(\''+esc(m.code)+'\')">复制验证码</button>':'')+
+        '<button class="btn sm ghost" onclick="retryMsg('+m.id+')">重发</button>'+
+        '</div></div>';
+    }
+    $('msgList').innerHTML=h||'<div class="empty">还没有收到短信</div>';
+  });
+}
+function retryMsg(id){
+  api('POST','/api/messages/retry',{id:id},function(d){
+    toast(d.ok?d.message:(d.error||'失败'), !d.ok); loadMsgs();
+  });
+}
+function copyText(t){
+  try{
+    var ta=document.createElement('textarea'); ta.value=t;
+    ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta);
+    ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+    toast('已复制 '+t);
+  }catch(e){ toast('复制失败，请手动选择', true); }
+}
+function importInbox(){
+  api('POST','/api/inbox/import',{},function(d){
+    toast(d.ok?d.message:(d.error||'失败'), !d.ok); loadMsgs();
+  });
+}
+function injectTest(){
+  api('POST','/api/messages/test',{peer:'10086',body:'面板测试消息 '+new Date().toLocaleTimeString()},
+    function(d){ toast(d.ok?d.message:(d.error||'失败'), !d.ok); setTimeout(loadMsgs,800); });
+}
+
+/* ---------- 发送 ---------- */
+function doSend(btn){
+  var to=$('sendTo').value.trim(), body=$('sendBody').value;
+  if(!to||!body){ toast('号码和内容都要填', true); return; }
+  if(btn) btn.disabled=true;
+  api('POST','/api/send',{to:to,body:body},function(d){
+    if(btn) btn.disabled=false;
+    toast(d.ok?d.message:(d.error||'发送失败'), !d.ok);
+    if(d.ok){ $('sendBody').value=''; $('sendHint').textContent='已提交 #'+d.id;
+      setTimeout(loadOutbox,1200); }
+  });
+}
+function loadOutbox(){
+  api('GET','/api/outbox?limit=20',null,function(d){
+    if(!d.ok) return;
+    var h='';
+    for(var i=0;i<d.messages.length;i++){
+      var m=d.messages[i];
+      var cls=m.status===1?'ok':m.status===2?'err':'wait';
+      var txt=m.status===1?'已发出':m.status===2?'失败':'发送中';
+      h+='<div class="msg"><div class="top"><span class="peer">'+esc(m.peer)+'</span>'+
+        '<span class="chip '+cls+'">'+txt+'</span></div>'+
+        '<div class="body">'+esc(m.body)+'</div>'+
+        '<div class="top" style="margin:0"><span class="mono">'+esc(m.iso)+'</span>'+
+        '<span>'+m.parts+' 片'+(m.err?' · '+esc(m.err):'')+'</span></div></div>';
+    }
+    $('outList').innerHTML=h||'<div class="empty">还没有发送记录</div>';
+  });
+}
+
+/* ---------- 通道 ---------- */
+function loadConfig(){
+  api('GET','/api/config',null,function(d){
+    if(!d.ok){ toast(d.error||'读取配置失败', true); return; }
+    try{ state.cfg=JSON.parse(d.json); }catch(e){ state.cfg={device:'',web:{},channels:[]}; }
+    if(!state.cfg.channels) state.cfg.channels=[];
+    state.cfg.web={enabled:d.web.enabled, port:d.web.port, user:d.web.user, pass:d.web.pass};
+    state.cfgRaw=d.json;
+    $('cfgDevice').value=state.cfg.device||'';
+    $('cfgPort').value=state.cfg.web.port||8080;
+    $('cfgUser').value=state.cfg.web.user||'admin';
+    $('cfgPass').value=state.cfg.web.pass||'admin';
+    $('swWeb').className='sw'+(state.cfg.web.enabled!==false?' on':'');
+    $('cfgFile').innerHTML='配置来源：<span class="mono">'+esc(d.file)+'</span> · '+
+      (d.fileExists?'文件存在（保存会同时写文件）':'仅存在 App 内部存储')+
+      ' · 面板：'+(d.running?'运行中，端口 '+d.port:'未运行');
+    renderChannels();
+  });
+}
+function renderChannels(){
+  var cs=state.cfg.channels, h='';
+  for(var i=0;i<cs.length;i++){
+    var c=cs[i];
+    h+='<div class="chitem"><div class="sw '+(c.enabled?'on':'')+'" onclick="toggleCh('+i+')"><i></i></div>'+
+      '<div class="meta"><div class="nm">'+esc(c.name||('通道'+(i+1)))+
+      ' <span class="chip" style="margin-left:4px">'+(c.type==='dingtalk'?'钉钉':'webhook')+'</span></div>'+
+      '<div class="url">'+esc(c.url||'（未填 URL，不会投递）')+'</div></div>'+
+      '<div class="row"><button class="btn sm ghost" onclick="editCh('+i+')">编辑</button>'+
+      '<button class="btn sm danger" onclick="delCh('+i+')">删除</button></div></div>';
+  }
+  $('chList').innerHTML=h||'<div class="empty">还没有通道</div>';
+}
+function toggleCh(i){
+  var c=state.cfg.channels[i]; c.enabled=!c.enabled;
+  c.__dirty=true; renderChannels(); toast(c.enabled?'已启用（记得保存）':'已停用（记得保存）');
+}
+function toggleWeb(){
+  var w=state.cfg.web;
+  var now=(w.enabled!==false);              // 未写该字段时按启用处理
+  w.enabled=!now;
+  $('swWeb').className='sw'+(w.enabled?' on':'');
+  toast(w.enabled?'面板将启用（记得保存）':'面板将禁用（记得保存）');
+}
+function addChannel(type){
+  state.cfg.channels.push({name:type==='dingtalk'?'新钉钉通道':'新Webhook',type:type,url:'',
+    prefix:'【短信】',secret:'',token:'',enabled:true});
+  renderChannels();
+  editCh(state.cfg.channels.length-1);
+}
+function delCh(i){
+  if(!confirm('删除通道「'+(state.cfg.channels[i].name||'')+'」？保存后生效')) return;
+  state.cfg.channels.splice(i,1); renderChannels();
+}
+function editCh(i){
+  state.editIdx=i;
+  var c=state.cfg.channels[i];
+  $('mTitle').textContent='编辑通道 · '+(c.name||('#'+(i+1)));
+  $('mName').value=c.name||''; $('mType').value=c.type||'webhook';
+  $('mUrl').value=c.url||''; $('mPrefix').value=c.prefix||'';
+  $('mSecret').value=c.secret||''; $('mToken').value=c.token||'';
+  $('modal').className='modal on';
+}
+function closeModal(){ $('modal').className='modal'; state.editIdx=-1; }
+function applyChannel(){
+  var i=state.editIdx; if(i<0) return;
+  var c=state.cfg.channels[i];
+  c.name=$('mName').value.trim(); c.type=$('mType').value;
+  c.url=$('mUrl').value.trim(); c.prefix=$('mPrefix').value;
+  c.secret=$('mSecret').value; c.token=$('mToken').value;
+  if(!c.name){ toast('名称不能为空', true); return; }
+  closeModal(); renderChannels();
+}
+function saveConfig(){
+  var cfg=state.cfg;
+  cfg.device=$('cfgDevice').value.trim();
+  cfg.web=cfg.web||{};
+  cfg.web.port=parseInt($('cfgPort').value,10)||8080;
+  cfg.web.user=$('cfgUser').value.trim()||'admin';
+  cfg.web.pass=$('cfgPass').value;
+  if(cfg.web.enabled===undefined) cfg.web.enabled=true;
+  // 清掉本地标记字段
+  for(var i=0;i<cfg.channels.length;i++) delete cfg.channels[i].__dirty;
+  api('POST','/api/config',cfg,function(d){
+    toast(d.ok?d.message:(d.error||'保存失败'), !d.ok);
+    if(d.ok&&d.restarted){ setTimeout(function(){ location.reload(); },1600); return; }
+    if(d.ok) loadConfig();
+  });
+}
+
+/* ---------- 系统 ---------- */
+function loadSys(){
+  api('GET','/api/sys',null,function(d){
+    if(!d.ok){ toast(d.error||'读取失败', true); return; }
+    state.sys=d;
+    var b=d.battery||{}, s=d.signal||{}, m=d.memory||{}, t=d.traffic||{};
+    $('sysHw').innerHTML=
+      kv('型号',esc(d.model))+kv('品牌',esc(d.brand))+kv('平台',esc(d.board||'-'))+
+      kv('基带',esc(d.baseband||'-'))+kv('序列号',esc(d.serial||'-'))+
+      kv('电量',(b.percent>=0?b.percent+'%':'未知'))+kv('电压',(b.voltage||0)+' mV')+
+      kv('温度',(b.temp||0)+' ℃')+kv('充电',esc(b.status||'-')+' / '+esc(b.plugged||'-'));
+    $('sysOs').innerHTML=
+      kv('Android',esc(d.android)+'（API '+d.sdk+'）')+kv('版本号',esc(d.build))+
+      kv('运行时长',esc(d.uptime))+kv('运营商',esc(d.operator||'-'))+
+      kv('网络',esc(d.netType||'-'))+kv('SIM',esc(d.sim||'-'))+
+      kv('信号',(s.dbm?s.dbm+' dBm / ASU '+s.asu:'未知'))+
+      kv('USB 模式',esc(d.adbd||'-'));
+    var st='';
+    for(var i=0;i<(d.storage||[]).length;i++){
+      var x=d.storage[i];
+      st+='<div style="margin-bottom:9px"><div class="kv" style="border:0;padding-bottom:2px">'+
+        '<span class="k">'+esc(x.name)+'</span><span class="v">'+fmtBytes(x.used)+' / '+fmtBytes(x.total)+
+        '（'+x.percent+'%）</span></div><div class="bar"><i style="width:'+x.percent+'%"></i></div></div>';
+    }
+    $('sysStore').innerHTML=st||'<div class="empty">无数据</div>';
+    $('sysTraffic').innerHTML=
+      kv('总接收',fmtBytes(t.rx))+kv('总发送',fmtBytes(t.tx))+
+      kv('移动网收',fmtBytes(t.mobileRx))+kv('移动网发',fmtBytes(t.mobileTx))+
+      kv('堆内存',fmtBytes(m.heapUsed)+' / '+fmtBytes(m.heapTotal))+
+      kv('进程 RSS',((m.procRss||0)/1024).toFixed(1)+' MB');
+    var nt='<table><tr><th>网卡</th><th>地址</th><th>MAC</th></tr>';
+    for(var j=0;j<(d.nets||[]).length;j++){
+      var n=d.nets[j];
+      nt+='<tr><td>'+esc(n.name)+'</td><td class="mono">'+esc(n.ip)+'</td><td class="mono">'+esc(n.mac||'-')+'</td></tr>';
+    }
+    $('sysNet').innerHTML=nt+'</table>';
+  });
+}
+
+/* ---------- WiFi ---------- */
+function loadWifi(){
+  api('GET','/api/wifi',null,function(d){
+    if(!d.ok){ toast(d.error||'读取失败', true); return; }
+    var s=d.state||{}, on=(s.ap===true);
+    $('swAp').className='sw'+(on?' on':'');
+    $('apHint').textContent=(s.ap===null?'状态不可读（ROM 限制）':on?'热点已开启':'热点已关闭')+
+      (s.wifiOn?' · station 模式也开着':'');
+    $('apInfo').innerHTML=
+      kv('SSID',esc(s.ssid||'-'))+kv('加密',s.secured?'WPA2':'开放/未知')+
+      kv('本机地址',esc(s.clientIp||'-'))+kv('客户端',(s.clients||[]).length+' 台');
+    if(s.ssid) $('apSsid').value=s.ssid;
+    var cl='<table><tr><th>IP</th><th>MAC</th></tr>', arr=s.clients||[];
+    for(var i=0;i<arr.length;i++) cl+='<tr><td class="mono">'+esc(arr[i].ip)+'</td><td class="mono">'+esc(arr[i].mac)+'</td></tr>';
+    $('apClients').innerHTML=arr.length?(cl+'</table>'):'<div class="empty">暂无客户端（ARP 表为空）</div>';
+  });
+}
+function toggleAp(){
+  var on=$('swAp').className.indexOf('on')>=0;
+  $('apHint').textContent='正在'+(on?'关闭':'开启')+'…';
+  api('POST','/api/wifi',{action:on?'off':'on'},function(d){
+    toast(d.ok?d.message:(d.error||'失败'), !d.ok); loadWifi();
+  });
+}
+function setAp(){
+  var ssid=$('apSsid').value.trim(), pass=$('apPass').value;
+  if(!ssid){ toast('SSID 不能为空', true); return; }
+  if(pass&&pass.length<8){ toast('WPA2 密码至少 8 位', true); return; }
+  api('POST','/api/wifi',{action:'set',ssid:ssid,pass:pass},function(d){
+    toast(d.ok?d.message:(d.error||'失败'), !d.ok); loadWifi();
+  });
+}
+function scanWifi(){
+  $('scanList').innerHTML='<div class="hint">扫描中，约 3 秒…</div>';
+  api('GET','/api/wifi/scan',null,function(d){
+    if(!d.ok){ $('scanList').innerHTML='<div class="hint">'+esc(d.error||'扫描失败')+'</div>'; return; }
+    var arr=d.list||[];
+    if(!arr.length){ $('scanList').innerHTML='<div class="hint">没扫到（热点开启时无法扫频，需先关热点）</div>'; return; }
+    var h='<table><tr><th>SSID</th><th>信号</th><th>信道</th></tr>';
+    for(var i=0;i<arr.length;i++){
+      var r=arr[i];
+      h+='<tr><td>'+esc(r.ssid||'(隐藏)')+(r.secured?' 🔒':'')+'</td><td class="num">'+r.level+' dBm</td><td class="num">'+r.channel+'</td></tr>';
+    }
+    $('scanList').innerHTML=h+'</table>';
+  });
+}
+
+/* ---------- 启动 ---------- */
+loadOverview();
+setInterval(function(){
+  if(document.hidden) return;
+  if(state.view==='overview') loadOverview();
+  else if(state.view==='msgs') loadMsgs();
+  else if(state.view==='wifi') loadWifi();
+}, 6000);
+loadOutbox();
+</script>
+</body>
+</html>

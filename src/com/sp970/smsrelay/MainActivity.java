@@ -46,7 +46,8 @@ public class MainActivity extends Activity {
         TextView tip = new TextView(this);
         tip.setTextSize(12);
         tip.setText("通道配置（JSON）：type = dingtalk | webhook\n" +
-                "device 可改；channels 里每项独立投递、独立重试");
+                "device 可改；channels 里每项独立投递、独立重试\n" +
+                "web 段控制面板：enabled/port/user/pass");
         root.addView(tip);
 
         etJson = new EditText(this);
@@ -87,6 +88,13 @@ public class MainActivity extends Activity {
             @Override
             public void onClick(View v) {
                 etJson.setText(AppConfig.effectiveJson(MainActivity.this));
+                updateStatus();
+            }
+        }));
+        bar2.addView(button("重启面板", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                toast(WebPanel.restart(MainActivity.this));
                 updateStatus();
             }
         }));
@@ -154,11 +162,19 @@ public class MainActivity extends Activity {
         Db db = new Db(this);
         AppConfig cfg = AppConfig.load(this);
         StringBuilder sb = new StringBuilder();
-        sb.append("设备：").append(android.os.Build.MODEL).append('\n');
+        sb.append("设备：").append(cfg.device).append(" / ").append(android.os.Build.MODEL)
+                .append('\n');
         sb.append("通道：").append(cfg.activeCount()).append(" / ").append(cfg.channels.size())
                 .append(" 启用\n");
-        sb.append("待发送：").append(db.pending()).append(" 条投递\n");
-        sb.append("已送达：").append(db.sent()).append(" 条投递\n");
+        sb.append("待发送：").append(db.pending())
+                .append("　已送达：").append(db.sent())
+                .append("　放弃：").append(db.failed()).append('\n');
+        if (WebPanel.isRunning()) {
+            sb.append("面板：http://").append(SysInfo.primaryIp()).append(':')
+                    .append(WebPanel.runningPort()).append("（").append(cfg.webUser).append("）\n");
+        } else {
+            sb.append("面板：未启动（配置 web.enabled=false 或端口占用）\n");
+        }
         String err = db.lastError();
         if (err != null && err.length() > 0) sb.append("最近错误：").append(err).append('\n');
         sb.append("配置文件 /sdcard/").append(AppConfig.CONF_NAME).append(" 存在时优先");
