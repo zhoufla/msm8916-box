@@ -102,8 +102,15 @@ public class RelayService extends Service {
                         for (int i = 0; i < list.size(); i++) {
                             Deliver d = list.get(i);
                             Channel ch = cfg.find(d.ch);
-                            if (ch == null || !ch.valid()) {
-                                db.markFail(d.dlId, 9, "通道不存在或已禁用: " + d.ch, 10);
+                            if (ch == null) {
+                                // 通道被删了就再也发不出去，直接判放弃（固定 tries=9 会一直 pending）
+                                db.markFail(d.dlId, 10, "通道已删除: " + d.ch, 10);
+                                Logs.add("relay", "放弃 " + d.ch + "：通道已删除");
+                                continue;
+                            }
+                            if (!ch.valid()) {
+                                // 只是被禁用/URL 没填，保留重试，等用户改好配置还能补发
+                                db.markFail(d.dlId, d.tries, "通道已禁用或 URL 无效: " + d.ch, 10);
                                 continue;
                             }
                             String err = Sender.send(ch, d, cfg.device);

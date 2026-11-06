@@ -5,12 +5,18 @@ import org.json.JSONObject;
 /** 一条转发通道。多个通道并行投递，各自独立重试。 */
 public final class Channel {
 
+    /**
+     * 默认转发模板：第一行发件人号码，第二行正文，第三行设备名。
+     * 占位符见 {@link Tpl}：{peer} {body} {device} {tag} {time}。
+     */
+    public static final String DEFAULT_TEMPLATE = "{peer}\n{body}\n设备：{device}";
+
     public String name = "";
     public String type = "webhook";     // webhook | dingtalk
     public String url = "";
     public String secret = "";          // 钉钉加签密钥 SEC…，可空
     public String token = "";           // webhook 的 X-Token，可空
-    public String prefix = "【短信】";    // 钉钉关键词模式需要正文带关键词
+    public String template = DEFAULT_TEMPLATE;  // 转发模板，占位符见 Tpl
     public String format = "text";      // 钉钉消息形态：text | markdown
     public String title = "";           // markdown 卡片标题，空则自动生成
     public String tag = "";             // 多设备标签：同一个机器人区分不同设备
@@ -24,7 +30,7 @@ public final class Channel {
         c.url = o.optString("url", "");
         c.secret = o.optString("secret", "");
         c.token = o.optString("token", "");
-        c.prefix = o.optString("prefix", "【短信】");
+        c.template = o.optString("template", DEFAULT_TEMPLATE);
         c.format = o.optString("format", "text");
         c.title = o.optString("title", "");
         c.tag = o.optString("tag", "");
@@ -42,7 +48,7 @@ public final class Channel {
             o.put("url", url);
             if (secret != null && secret.length() > 0) o.put("secret", secret);
             if (token != null && token.length() > 0) o.put("token", token);
-            o.put("prefix", prefix);
+            o.put("template", nzTemplate());
             if (isDingTalk() && isMarkdown()) {
                 o.put("format", format);
                 if (title != null && title.length() > 0) o.put("title", title);
@@ -70,5 +76,10 @@ public final class Channel {
 
     public String nzTag() {
         return tag == null ? "" : tag.trim();
+    }
+
+    /** 模板为空就退回默认三行模板，避免配错后消息只剩正文。 */
+    public String nzTemplate() {
+        return (template == null || template.trim().length() == 0) ? DEFAULT_TEMPLATE : template;
     }
 }
