@@ -114,17 +114,9 @@ public final class Radio {
             if (slots.length() == 0) slots.put("未知");
             o.put("simSlots", slots);
 
-            // 驻留小区：getAllCellInfo() 在本机 ROM 一次要 4-5 秒（RIL 慢），
-            // 同步调会把整个 /api/radio 拖到 smoke 的 8s 超时边缘（真机踩过）。
-            // 改为后台线程 30s 刷新缓存，radioInfo 只读缓存，永不阻塞。
-            startCellInfoThread(ctx);
-            JSONObject cell = cellInfoCache;
-            if (cell != null) {
-                String[] keys = {"pci", "tac", "cid", "earfcn", "band"};
-                for (int i = 0; i < keys.length; i++) {
-                    if (cell.has(keys[i])) o.put(keys[i], cell.opt(keys[i]));
-                }
-            }
+            // 驻留小区（PCI/TAC/CID/频段）已移除：本机 ROM 的 CellIdentityLte 不填
+            // EARFCN，频段号拿不到；getAllCellInfo 虽然走缓存不阻塞，但展示价值低，
+            // 按用户要求去掉（2026-11-07）。
             o.put("route", join(sec.get("ROUTE")).trim());
             o.put("iccid", iccid(ctx));
             o.put("iccidRaw", iccidRaw(ctx));
@@ -416,90 +408,6 @@ public final class Radio {
     }
 
     // ---------- #16 SIM 锁 / ICCID ----------
-
-    // 驻留小区缓存：getAllCellInfo 慢（4-5s），后台线程定时刷新，radioInfo 读缓存
-    private static volatile JSONObject cellInfoCache = null;
-    private static volatile boolean cellThreadStarted = false;
-
-    /** 懒启动的守护线程：每 30s 刷新一次驻留小区缓存。 */
-    private static void startCellInfoThread(final Context ctx) {
-        if (cellThreadStarted) return;
-        synchronized (Radio.class) {
-            if (cellThreadStarted) return;
-            cellThreadStarted = true;
-            Thread t = new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    while (true) {
-                        try {
-                            refreshCellInfo(ctx);
-                        } catch (Throwable ignored) {
-                        }
-                        try {
-                            Thread.sleep(30_000L);
-                        } catch (Throwable ignored) {
-                        }
-                    }
-                }
-            });
-            t.setDaemon(true);
-            t.start();
-        }
-    }
-
-    /** 拉一次 getAllCellInfo 并写缓存；失败保留旧缓存。 */
-    private static void refreshCellInfo(Context ctx) {
-        if (android.os.Build.VERSION.SDK_INT < 17) return;
-        TelephonyManager tm = (TelephonyManager)
-                ctx.getSystemService(Context.TELEPHONY_SERVICE);
-        java.util.List<android.telephony.CellInfo> cis =
-                tm == null ? null : tm.getAllCellInfo();
-        if (cis == null) return;
-        for (int i = 0; i < cis.size(); i++) {
-            android.telephony.CellInfo ci = cis.get(i);
-            if (!(ci instanceof android.telephony.CellInfoLte)) continue;
-            if (!ci.isRegistered()) continue;
-            android.telephony.CellIdentityLte id =
-                    ((android.telephony.CellInfoLte) ci).getCellIdentity();
-            if (id == null) continue;
-            JSONObject c = new JSONObject();
-            try {
-                c.put("pci", id.getPci());
-                c.put("tac", id.getTac());
-                c.put("cid", id.getCi());
-                int e = lteEarfcn(id);
-                if (e > 0) {
-                    c.put("earfcn", e);
-                    c.put("band", LteBand.fromEarfcn(e));
-                }
-            } catch (Throwable ignored) {
-            }
-            cellInfoCache = c;
-            break;
-        }
-    }
-
-    /**
-     * 从 CellIdentityLte 反射拿 EARFCN。
-     * 公开 getEarfcn() 是 API 24 才有的，这台 4.4 上只能反射：
-     * 先试 getEarfcn() 方法（新 ROM 有），再退内部字段 mEarfcn（API 17+ 的内部结构都有）。
-     * 都拿不到返回 -1（调用方当"读不到"处理）。
-     */
-    static int lteEarfcn(android.telephony.CellIdentityLte id) {
-        try {
-            java.lang.reflect.Method m = id.getClass().getMethod("getEarfcn");
-            m.setAccessible(true);
-            return m.invoke(id) instanceof Integer ? (Integer) m.invoke(id) : -1;
-        } catch (Throwable ignored) {
-        }
-        try {
-            java.lang.reflect.Field f = id.getClass().getDeclaredField("mEarfcn");
-            f.setAccessible(true);
-            return f.getInt(id);
-        } catch (Throwable t) {
-            return -1;
-        }
-    }
 
     /**
      * 固件没有 ril.iccid.* 属性，只能问 TelephonyManager。

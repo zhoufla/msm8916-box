@@ -1688,10 +1688,6 @@ function loadNet(){
     $('netState').innerHTML=
       kv('制式','<span class="mono">'+esc(modeTxt)+'</span> · '+esc(d.modeLabel||''))+
       kv('网络',esc(d.netType||'-')+' · '+esc(d.operator||'-'))+
-      kv('驻留小区',d.band?('<span class="chip acc">'+esc(d.band)+'</span> <span class="mono">EARFCN '+esc(d.earfcn)+
-        (d.pci!==undefined?' · PCI '+esc(d.pci):'')+'</span>'):
-        (d.pci!==undefined?'<span class="mono">PCI '+esc(d.pci)+' · TAC '+esc(d.tac)+' · CID '+esc(d.cid)+
-        '</span> <span class="hint">（频段号本 ROM 未上报）</span>':'<span class="hint">读不到（RIL 未上报小区信息）</span>'))+
       kv('首选 APN',esc(d.preferredApn||'-')+' <span class="mono">'+
         (d.preferredApnApn?'（'+esc(d.preferredApnApn)+'）':'')+'</span>')+
       kv('默认路由','<span class="mono">'+esc((d.route||'-').split('\n')[0])+'</span>');
