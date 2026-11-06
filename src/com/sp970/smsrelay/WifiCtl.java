@@ -78,7 +78,8 @@ public final class WifiCtl {
             o.put("mode", ap ? "ap" : (sta ? "sta" : "off"));
 
             WifiConfiguration c = apConfig(w);
-            o.put("ssid", c == null ? "" : nz(c.SSID));
+            // buildConfig 现在写带引号的 SSID（supplicant 规范格式），展示时去掉引号
+            o.put("ssid", c == null ? "" : WifiCfg.stripQuotes(nz(c.SSID)));
             o.put("secured", c != null && c.preSharedKey != null && c.preSharedKey.length() > 0);
 
             JSONArray ifs = wifiIfaces();
@@ -263,11 +264,7 @@ public final class WifiCtl {
                     for (int i = 0; i < saved.size(); i++) {
                         WifiConfiguration c = saved.get(i);
                         if (c == null || c.SSID == null) continue;
-                        String s = nz(c.SSID);
-                        if (s.startsWith("\"") && s.endsWith("\"") && s.length() >= 2) {
-                            s = s.substring(1, s.length() - 1);
-                        }
-                        if (s.equals(target)) { netId = c.networkId; break; }
+                        if (WifiCfg.ssidEquals(c.SSID, target)) { netId = c.networkId; break; }
                     }
                 }
                 // 2. 没有已存配置（或带密码重连）就新建；同 SSID 已存但带了新密码时先删旧的
@@ -277,8 +274,16 @@ public final class WifiCtl {
                 }
                 if (netId < 0) {
                     netId = w.addNetwork(buildConfig(target, pass));
+                    if (netId < 0 && pass != null && pass.length() > 0) {
+                        // 本机 ROM 的 wifi JNI 给 supplicant 发 psk 时不包双引号（标准 4.4 会包），
+                        // supplicant 把 passphrase 当 64-hex 校验 → "Invalid PSK" → 框架删网络。
+                        // 先裸试兼容标准 ROM，失败后手动包引号再试（WifiCfg 注释有完整分析）。
+                        Logs.add("wifi", "addNetwork 失败，psk 包引号重试（本机 ROM 不自动加引号）");
+                        netId = w.addNetwork(buildConfig(target, WifiCfg.quotePsk(pass)));
+                    }
                     if (netId < 0) {
-                        return result(ctx, w, false, "保存网络配置失败（系统拒绝）");
+                        return result(ctx, w, false,
+                                "保存网络配置失败（系统拒绝）：密码可能有特殊字符或不被本机支持（WPA 密码应为 8–63 位）");
                     }
                 }
                 if (!w.enableNetwork(netId, true)) {
@@ -288,15 +293,12 @@ public final class WifiCtl {
                 Logs.add("wifi", "reconnect → " + re + " netId=" + netId);
 
                 // 3. 轮询等连接：SSID 对上且拿到 IP 才算成功，最长 ~18s
-                String curSsid = "";
+                String curSsid;
                 for (int i = 0; i < 12; i++) {
                     sleep(1500);
                     WifiInfo wi = w.getConnectionInfo();
                     if (wi != null) {
-                        curSsid = nz(wi.getSSID());
-                        if (curSsid.startsWith("\"") && curSsid.endsWith("\"") && curSsid.length() >= 2) {
-                            curSsid = curSsid.substring(1, curSsid.length() - 1);
-                        }
+                        curSsid = WifiCfg.stripQuotes(nz(wi.getSSID()));
                         if (target.equals(curSsid) && wi.getIpAddress() != 0) {
                             String ip = intToIp(wi.getIpAddress());
                             Logs.add("wifi", "已连接 " + target + " ip=" + ip);
@@ -402,7 +404,8 @@ public final class WifiCtl {
     private static WifiConfiguration buildConfig(String ssid, String pass) {
         WifiConfiguration cfg = new WifiConfiguration();
         // SSID 必须带引号（WifiConfiguration 规范格式），不带引号 supplicant 不认
-        cfg.SSID = ssid.startsWith("\"") ? ssid : "\"" + ssid + "\"";
+        cfg.SSID = WifiCfg.stripQuotes(ssid).length() == 0 ? ssid
+                : "\"" + WifiCfg.stripQuotes(ssid) + "\"";
         if (pass == null || pass.length() == 0) {
             cfg.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE);
         } else {
