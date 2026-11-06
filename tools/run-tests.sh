@@ -34,7 +34,7 @@ trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/com/sp970/smsrelay" "$WORK/android/util"
 
 # 能在桌面跑的部分：不含任何 android.* 依赖（Logs 用 test 里的替身）
-for f in Channel SmsEvent Deliver Sender Tpl Ver Retry MD5 Http; do
+for f in Channel SmsEvent Deliver Sender Tpl Ver Retry MD5 Http WifiCfg; do
     cp "$ROOT/src/com/sp970/smsrelay/$f.java" "$WORK/com/sp970/smsrelay/"
 done
 cp -r "$ROOT/test/." "$WORK/"
@@ -45,6 +45,9 @@ find . -name '*.java' -exec sed -i 's/\r$//' {} +
 
 echo "== 逻辑测试"
 "$JBIN/java" -cp "out:$JAR" com.sp970.smsrelay.LogicTest
+
+echo "== WiFi 配置测试"
+"$JBIN/java" -cp "out:$JAR" com.sp970.smsrelay.WifiTest
 
 echo "== HTTP 测试"
 "$JBIN/java" -cp "out:$JAR" com.sp970.smsrelay.HttpTest
