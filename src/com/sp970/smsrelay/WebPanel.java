@@ -224,6 +224,9 @@ public final class WebPanel {
             x.put("type", c.type);
             x.put("enabled", c.enabled);
             x.put("active", c.valid());
+            x.put("tag", c.nzTag());
+            x.put("format", c.isMarkdown() ? "markdown" : "text");
+            x.put("maxTries", c.maxTries);
             x.put("host", hostOf(c.url));
             chs.put(x);
         }
@@ -308,9 +311,17 @@ public final class WebPanel {
             String name = c.optString("name", "");
             String url = c.optString("url", "");
             String type = c.optString("type", "webhook");
+            String format = c.optString("format", "text");
+            int maxTries = c.optInt("maxTries", 10);
             if (name.length() == 0) throw new IllegalArgumentException("第 " + (i + 1) + " 个通道缺少 name");
             if (!"dingtalk".equalsIgnoreCase(type) && !"webhook".equalsIgnoreCase(type)) {
                 throw new IllegalArgumentException("通道 " + name + " 的 type 只能是 dingtalk / webhook");
+            }
+            if (!"text".equalsIgnoreCase(format) && !"markdown".equalsIgnoreCase(format)) {
+                throw new IllegalArgumentException("通道 " + name + " 的 format 只能是 text / markdown");
+            }
+            if (maxTries < 1 || maxTries > 50) {
+                throw new IllegalArgumentException("通道 " + name + " 的 maxTries 需在 1~50 之间");
             }
             if (url.length() > 0 && !url.startsWith("http")) {
                 throw new IllegalArgumentException("通道 " + name + " 的 url 不是 http 开头");

@@ -23,12 +23,27 @@ public final class Sender {
             byte[] payload;
 
             if (ch.isDingTalk()) {
-                String content = nz(ch.prefix) + "[" + nz(d.peer) + "]\n" + nz(d.body);
+                String tagPart = ch.nzTag().length() > 0 ? "[" + ch.nzTag() + "] " : "";
+                String content = tagPart + nz(ch.prefix) + "[" + nz(d.peer) + "]\n" + nz(d.body);
                 JSONObject o = new JSONObject();
-                o.put("msgtype", "text");
-                JSONObject t = new JSONObject();
-                t.put("content", content);
-                o.put("text", t);
+                if (ch.isMarkdown()) {
+                    // 卡片消息：标题优先用通道配置，缺省用「设备 + 号码」；
+                    // 关键词校验模式下 prefix 落在正文里，仍然能过机器人校验。
+                    String titleText = nz(ch.title).trim();
+                    if (titleText.length() == 0) {
+                        titleText = "短信 · " + nz(device) + " · " + nz(d.peer);
+                    }
+                    JSONObject md = new JSONObject();
+                    md.put("title", tagPart + titleText);
+                    md.put("text", content + "\n\n> " + isoTime(d.ts));
+                    o.put("msgtype", "markdown");
+                    o.put("markdown", md);
+                } else {
+                    o.put("msgtype", "text");
+                    JSONObject t = new JSONObject();
+                    t.put("content", content);
+                    o.put("text", t);
+                }
                 payload = o.toString().getBytes("UTF-8");
                 if (ch.secret != null && ch.secret.length() > 0) {
                     long ts = System.currentTimeMillis();
@@ -37,7 +52,7 @@ public final class Sender {
                             + URLEncoder.encode(dingTalkSign(ts, ch.secret), "UTF-8");
                 }
             } else {
-                payload = d.toEvent().toJson(device).toString().getBytes("UTF-8");
+                payload = d.toEvent().toJson(device, ch.nzTag()).toString().getBytes("UTF-8");
             }
 
             conn = (HttpURLConnection) new URL(url).openConnection();
@@ -103,6 +118,11 @@ public final class Sender {
 
     private static String nz(String s) {
         return s == null ? "" : s;
+    }
+
+    private static String isoTime(long ts) {
+        return new java.text.SimpleDateFormat("MM-dd HH:mm:ss", java.util.Locale.CHINA)
+                .format(new java.util.Date(ts > 0 ? ts : System.currentTimeMillis()));
     }
 
     private static String cut(String s) {

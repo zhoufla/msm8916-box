@@ -147,16 +147,22 @@ public final class Db extends SQLiteOpenHelper {
         }
     }
 
-    /** 失败退避：1/2/4/8/16/30 分钟，10 次后放弃（记录保留便于排查）。 */
+    /** 失败退避：1/2/4/8/16/30 分钟，默认 10 次后放弃（记录保留便于排查）。 */
     public void markFail(long dlId, int tries, String err) {
+        markFail(dlId, tries, err, 10);
+    }
+
+    /** 同上，次数上限由通道配置决定。 */
+    public void markFail(long dlId, int tries, String err, int maxTries) {
         try {
+            int limit = maxTries < 1 ? 1 : (maxTries > 50 ? 50 : maxTries);
             int t = tries + 1;
             long backoff = 60L * 1000L * Math.min(30, 1 << Math.min(t - 1, 5));
             ContentValues v = new ContentValues();
             v.put("tries", t);
             v.put("err", err == null ? "" : (err.length() > 300 ? err.substring(0, 300) : err));
             v.put("next_at", System.currentTimeMillis() + backoff);
-            v.put("status", t >= 10 ? 2 : 0);
+            v.put("status", t >= limit ? 2 : 0);
             getWritableDatabase().update("dl", v, "id=?", new String[]{String.valueOf(dlId)});
         } catch (Throwable ignored) {
         }

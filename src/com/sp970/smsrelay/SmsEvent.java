@@ -26,9 +26,15 @@ public final class SmsEvent {
     }
 
     public JSONObject toJson(String device) {
+        return toJson(device, "");
+    }
+
+    /** tag 非空时带上，同一 webhook 收多台设备时用来区分。 */
+    public JSONObject toJson(String device, String tag) {
         JSONObject o = new JSONObject();
         try {
             o.put("device", device == null ? "" : device);
+            if (tag != null && tag.length() > 0) o.put("tag", tag);
             o.put("peer", peer == null ? "" : peer);
             o.put("body", body == null ? "" : body);
             o.put("code", code == null ? "" : code);

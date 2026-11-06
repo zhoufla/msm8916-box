@@ -102,7 +102,7 @@ public class RelayService extends Service {
                             Deliver d = list.get(i);
                             Channel ch = cfg.find(d.ch);
                             if (ch == null || !ch.valid()) {
-                                db.markFail(d.dlId, 9, "通道不存在或已禁用: " + d.ch);
+                                db.markFail(d.dlId, 9, "通道不存在或已禁用: " + d.ch, 10);
                                 continue;
                             }
                             String err = Sender.send(ch, d, cfg.device);
@@ -111,9 +111,9 @@ public class RelayService extends Service {
                                 Logs.add("relay", "送达 " + ch.name + " ← " + d.peer);
                                 sent++;
                             } else {
-                                db.markFail(d.dlId, d.tries, err);
+                                db.markFail(d.dlId, d.tries, err, ch.maxTries);
                                 Logs.add("relay", "失败 " + ch.name + " 第 " + (d.tries + 1)
-                                        + " 次：" + err);
+                                        + "/" + ch.maxTries + " 次：" + err);
                             }
                         }
                     } finally {
