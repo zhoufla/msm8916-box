@@ -1,10 +1,11 @@
-# sp970box — SP970 随身 WiFi 管理套件
+# msm8916-box — MSM8916 随身 WiFi 管理套件
 
-SP970-B（MSM8916，Android 4.4.4 eng/root）随身 WiFi 棒子的设备管理套件。
+面向 MSM8916 平台随身 WiFi 棒子（SP970-B 等，Android 4.4.4 eng/root）的设备管理套件。
 **短信网关**是第一个落地的模块：SIM 收到的短信实时转发到钉钉机器人 / 自建 webhook，
 断网退避重试、开机自启。后续模块（Web 面板、短信发送、系统信息、WiFi 控制）见路线图。
 
 > 定位：把一根只当热点用的棒子，变成可远程管理的短信网关 + 设备面板。
+> 理论上通用于同平台（MSM8916 / 8916 系）刷了原厂安卓的随身 WiFi 设备。
 
 ## 当前功能
 
@@ -68,7 +69,7 @@ adb shell am broadcast -a com.sp970.smsrelay.TEST --ez importinbox true
 - root 救援通道：webkey 后台 `POST http://192.168.42.129/run`（Digest admin/admin，uid=0）
 - 镜像工具：`tools/patch-system-img.sh`（debugfs 离线删应用/注入 APK）、`tools/remove-vendor.txt`（删除清单）
 
-## 路线图（sp970box 计划中）
+## 路线图
 
 - [ ] **Web 面板**：App 内嵌 HTTP 服务（端口 8080+），浏览器直连 192.168.42.129 管理
   - 收件箱浏览 / 转发记录（ev+dl 表可视化）/ 实时状态
@@ -86,5 +87,5 @@ smsrelay/
 ├── build.sh                   # aapt→javac→d8→zipalign→apksigner 六步流水线
 ├── src/com/sp970/smsrelay/    # 13 个类，无第三方依赖，无 res/（免资源编译）
 ├── config/smsrelay.conf.example
-└── tools/                     # 镜像离线定制脚本（flash 前用）
+└── tools/                       # 镜像离线定制脚本（flash 前用）
 ```
