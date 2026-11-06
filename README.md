@@ -106,6 +106,10 @@
 - `apIp` 是热点地址（本机 `192.168.0.1/24`），`station.ip` 只放连路由器拿到的地址，
   两者不混用，避免热点模式下误以为「已连网络」。
 - `hint` 说明当前为什么干不了活（模块没加载 / 热点占着射频 / station 没开）。
+- **WiFi 与热点互斥**：驱动只有一颗射频、一个模式开关
+  `/sys/module/wlan/parameters/con_mode`（0=STA、1=AP）。热点开着时 `sta_on` 直接回
+  `ok:false` 并说明「请先关热点」；`ap_on` 会自动先关 station，并在 `message` 里注明
+  「已自动关闭 WiFi」。面板失败提示统一取 `message`（后端业务失败用 `message`，HTTP 层错误用 `error`）。
 
 curl 示例：
 
