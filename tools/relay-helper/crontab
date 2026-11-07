@@ -3,11 +3,11 @@
 # 面板「维护 → 定时任务」可直接编辑本文件，保存后 30s 内自动重载。
 # 默认：每日体检 + 每 2 分钟日志快照 + 每 2 分钟 8080 面板自愈；需要定时重启热点/补收时再加行。
 0 4 * * * /system/bin/sh /system/etc/relay-helper/bin/health.sh >> /sdcard/Download/smsrelay-health.log 2>&1
-# JZ02 复用主线 8080 面板看门狗（root，每 2 分钟；日志由脚本自写 smsrelay-watchdog.log）
-# 依赖 JZ02 APK 升到 v1.8.x 提供 /api/ping + WatchdogReceiver + smsrelay-port
+# 8080 面板看门狗（复用主线 watchdog-8080，root，每 2 分钟；日志由脚本自写 smsrelay-watchdog.log）
+# 前提：设备侧 APK 需为 v1.8.x+（提供 /api/ping + WatchdogReceiver + smsrelay-port），否则探活恒失败会触发 reboot
 */2 * * * * /system/bin/sh /system/etc/relay-helper/bin/logsnap.sh >/dev/null 2>&1
 */2 * * * * /system/bin/sh /system/etc/relay-helper/bin/watchdog-8080.sh >/dev/null 2>&1
-# JZ02 精简：回收后台缓存进程（HOME 包保留，仅清进程；am kill 只杀可回收的后台，前台/LMK 保护不受影响）
+# 精简（JZ02/SP970 通用）：回收后台缓存进程（HOME 包保留，仅清进程；am kill 只杀可回收的后台，前台/LMK 保护不受影响）
 # 分钟位取 1,6,11,…（模 5），与每 2 分钟的看门狗偶有同分钟并发，am kill 秒级返回、互不干扰。
-# 逐项论证见 tools/jz02/README.md「v7 运行态精简」。
+# JZ02 逐项论证见 tools/jz02/README.md「v7 运行态精简」；SP970 见 tools/sp970/README.md。
 1,6,11,16,21,26,31,36,41,46,51,56 * * * * /system/bin/am kill com.android.launcher3 com.android.systemui com.android.keychain com.android.onetimeinitializer com.android.settings com.android.providers.contacts com.android.providers.media com.android.defcontainer >/dev/null 2>&1
