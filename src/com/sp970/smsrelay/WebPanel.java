@@ -170,6 +170,12 @@ public final class WebPanel {
         if ("/api/logs".equals(path)) return Http.Resp.json(logs(p));
         if ("/api/messages".equals(path)) return Http.Resp.json(messages(p));
         if ("/api/outbox".equals(path)) return Http.Resp.json(outbox(p));
+        if ("/api/sysinbox".equals(path)) return Http.Resp.json(sysInbox(p));
+        if ("/api/sysinbox/forward".equals(path)) {
+            if (!post) throw new IllegalArgumentException("需要 POST");
+            return Http.Resp.json(SysInbox.forwardOne(app, p.optString("peer", "").trim(),
+                    p.optString("body", ""), p.optLong("ts", 0)).toString());
+        }
         if ("/api/config".equals(path)) return post ? saveConfig(req) : loadConfig();
 
         if ("/api/messages/retry".equals(path)) {
@@ -520,23 +526,61 @@ public final class WebPanel {
         return o.toString();
     }
 
+    /** 分页参数：page 从 1 起；page_size 优先，兼容旧 limit 参数（1~100）。 */
+    private static int pageOf(JSONObject p) {
+        return Math.max(1, p.optInt("page", 1));
+    }
+
+    private static int sizeOf(JSONObject p) {
+        int s = p.has("page_size") ? p.optInt("page_size", 20) : p.optInt("limit", 20);
+        if (s < 1) s = 1;
+        if (s > 100) s = 100;
+        return s;
+    }
+
+    /** 转发记录分页：收信本体 + 每通道投递状态。响应带 total/page/page_size 供面板翻页。 */
     private String messages(JSONObject p) throws Exception {
-        int limit = p.optInt("limit", 50);
-        if (limit < 1) limit = 1;
-        if (limit > 300) limit = 300;
+        int page = pageOf(p), size = sizeOf(p);
+        Db db = db();
         JSONObject o = new JSONObject();
         o.put("ok", true);
-        o.put("messages", db().recentJson(limit));
+        o.put("total", db.events());
+        o.put("page", page);
+        o.put("page_size", size);
+        o.put("messages", db.recentJson(size, (page - 1) * size));
         return o.toString();
     }
 
+    /** 发送记录分页。 */
     private String outbox(JSONObject p) throws Exception {
-        int limit = p.optInt("limit", 30);
-        if (limit < 1) limit = 1;
-        if (limit > 200) limit = 200;
+        int page = pageOf(p), size = sizeOf(p);
+        Db db = db();
         JSONObject o = new JSONObject();
         o.put("ok", true);
-        o.put("messages", db().outboxJson(limit));
+        o.put("total", db.countOut());
+        o.put("page", page);
+        o.put("page_size", size);
+        o.put("messages", db.outboxJson(size, (page - 1) * size));
+        return o.toString();
+    }
+
+    /**
+     * 系统收件箱（只读）分页，每条带「已转发」标记。
+     * total=-1 表示 ROM 没给出总数，前端降级为只有「下一页」的模式。
+     */
+    private String sysInbox(JSONObject p) throws Exception {
+        int page = pageOf(p), size = sizeOf(p);
+        JSONObject r = SysInbox.page(app, page, size);
+        JSONObject o = new JSONObject();
+        o.put("ok", r != null);
+        o.put("page", page);
+        o.put("page_size", size);
+        if (r == null) {
+            o.put("message", "读不到系统收件箱（provider 不可用或权限缺失）");
+            return o.toString();
+        }
+        o.put("total", r.optInt("total", -1));
+        o.put("messages", r.optJSONArray("messages"));
         return o.toString();
     }
 

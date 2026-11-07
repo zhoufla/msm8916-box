@@ -61,8 +61,10 @@
 "web": {"enabled": true, "port": 8080, "user": "admin", "pass": "admin"}
 ```
 
-九个页面：**概览**（队列/设备/信号/最近日志）· **短信**（收信 + 每通道投递状态 + 重发 +
-补收 + 注入测试）· **发送**（发短信 + 发送记录）· **通道**（通道增删改、设备名、面板账号）·
+八个页面：**概览**（队列/设备/信号/最近日志）· **短信**（三个子页签，列表均分页每页 20 条：
+**系统收件箱** 只读浏览系统短信 + 已转发标记 + 单条转发 / 补收全部 · **短信发送** 发短信 +
+发送记录 · **转发配置** 转发记录（收信 + 每通道投递状态、重发、注入测试、清理已放弃）+
+通道增删改 + 配置文件来源）·
 **系统**（硬件/系统/存储/流量/网卡）· **WiFi**（热点开关与 SSID/密码、station 开关、
 无线网卡与 MAC/IP、客户端、扫频、隐藏 SSID/关联上限/踢客户端）· **网络**（APN、网络制式、
 数据/漫游开关、SIM 锁、流量统计、网络诊断）· **升级** · **维护**（root 命令框、体检、日志、
@@ -76,13 +78,15 @@
 |---|---|---|
 | GET | `/api/status` | 概览：设备、面板、通道、队列计数 |
 | GET | `/api/sys` | 系统信息全量 |
-| GET | `/api/messages?limit=50` | 收信列表 + 每通道投递状态 |
+| GET | `/api/messages?page=1&page_size=20` | 转发记录分页（收信 + 每通道投递状态），回 `total/page/page_size`；旧 `limit` 参数仍兼容 |
+| GET | `/api/sysinbox?page=1&page_size=20` | 系统收件箱只读分页，每条带 `relayed` 已转发标记；ROM 不给总数时 `total=-1` |
+| POST | `/api/sysinbox/forward` | 单条转发系统收件箱短信（`{"peer","body","ts"}`），走 90s 窗口判重防重复投递 |
 | POST | `/api/messages/retry` | 重发（`{"id":123}`），顺带补建新通道的投递 |
 | POST | `/api/messages/test` | 注入测试消息（`{"peer","body"}`） |
 | POST | `/api/inbox/import` | 补收系统收件箱 |
 | POST | `/api/messages/delete` | 删收信：`{"id":123}` 单条（连投递一起删），`{"scope":"givenup"}` 清全部「已放弃」投递及因此变空的消息 |
 | POST | `/api/send` | 发短信（`{"to","body"}`） |
-| GET | `/api/outbox?limit=20` | 发件记录 |
+| GET | `/api/outbox?page=1&page_size=20` | 发件记录分页，回 `total/page/page_size`；旧 `limit` 参数仍兼容 |
 | POST | `/api/outbox/delete` | 删发件记录（`{"id":3}`，只删记录不动已发的短信） |
 | GET | `/api/config` | 当前生效配置 + 来源文件 + 面板状态 |
 | POST | `/api/config` | 保存配置（body 为完整配置 JSON） |
@@ -393,8 +397,8 @@ adb shell am broadcast -a com.sp970.smsrelay.TEST --ez importinbox true
 msm8916-box/
 ├── AndroidManifest.xml        # API 19，短信/WiFi/电话状态权限
 ├── build.sh                   # aapt→javac→d8→zipalign→apksigner 六步流水线
-├── src/com/sp970/smsrelay/    # 23 个类（新增 Root.java / Maint.java），无第三方依赖，无 res/
-├── assets/web/index.html      # 面板单页（8 个 tab，aapt -A assets 打包）
+├── src/com/sp970/smsrelay/    # 34 个类（本次新增 SysInbox.java），无第三方依赖，无 res/
+├── assets/web/index.html      # 面板单页（8 个顶级 tab，短信内含 3 个子页签，aapt -A assets 打包）
 ├── test/                      # 离线测试源码（纯 JVM，tools/run-tests.sh 驱动）
 ├── config/smsrelay.conf.example
 └── tools/

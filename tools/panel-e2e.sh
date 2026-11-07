@@ -84,6 +84,18 @@ for ep in messages outbox logs; do
     chktrue "/api/$ep ok" "$WORK/$ep.json" "d.get('ok')"
 done
 
+echo "== 短信子页签接口（分页 + 系统收件箱）"
+get "/api/messages?page=1&page_size=20" pgm.json
+chktrue "/api/messages 分页 ok"              "$WORK/pgm.json" "d.get('ok')"
+chktrue "/api/messages 回 total/page/size"   "$WORK/pgm.json" "(d.get('total') or -1)>=0 and d.get('page')==1 and d.get('page_size')==20"
+chktrue "/api/messages 每页条数不超 page_size" "$WORK/pgm.json" "len(d.get('messages') or [])<=20"
+get "/api/outbox?page=1&page_size=20" pgo.json
+chktrue "/api/outbox 分页 ok+total"          "$WORK/pgo.json" "(d.get('ok')) and (d.get('total') or -1)>=0"
+get "/api/sysinbox?page=1&page_size=20" psi.json
+chktrue "/api/sysinbox ok"                   "$WORK/psi.json" "d.get('ok')"
+chktrue "/api/sysinbox total>=-1（ROM 不给总数时降级）" "$WORK/psi.json" "(d.get('total') or -1)>=-1"
+chktrue "/api/sysinbox 每条带 relayed 标记"   "$WORK/psi.json" "all(('relayed' in m) for m in (d.get('messages') or []))"
+
 get /api/config cf.json
 chktrue "/api/config ok"           "$WORK/cf.json" "d.get('ok')"
 chktrue "/api/config.json 可解析且有 web" "$WORK/cf.json" "'web' in json.loads(d.get('json','{}'))"
@@ -140,6 +152,23 @@ post /api/messages/test '{"peer":"10086","body":"panel-e2e"}' mt.json
 chktrue "/api/messages/test ok"    "$WORK/mt.json" "d.get('ok')"
 post /api/inbox/import '{}' ii.json
 chktrue "/api/inbox/import ok"     "$WORK/ii.json" "d.get('ok')"
+# 单条转发：上一步补收已把收件箱全部入队，这里转发收件箱第一条必然判重命中，
+# 只验证链路与防重逻辑，不会产生真实投递（收件箱为空则跳过）。
+NINBOX=$(jval "$WORK/psi.json" "len(d.get('messages') or [])")
+if [ "${NINBOX:-0}" -gt 0 ]; then
+    FWD=$(python3 - "$WORK/psi.json" <<'PYJ'
+import json, sys
+d = json.load(open(sys.argv[1]))
+m = (d.get('messages') or [])[0]
+print(json.dumps({'peer': m.get('peer', ''), 'body': m.get('body', ''), 'ts': m.get('ts', 0)}, ensure_ascii=False))
+PYJ
+)
+    post /api/sysinbox/forward "$FWD" sf.json
+    chktrue "/api/sysinbox/forward ok" "$WORK/sf.json" "d.get('ok')"
+    chktrue "/api/sysinbox/forward 判重命中不重复投递" "$WORK/sf.json" "(d.get('duplicate')) or ('判重' in (d.get('message') or ''))"
+else
+    echo "  （系统收件箱为空或读取失败，跳过单条转发验证）"
+fi
 
 echo "== 常用命令预设（与面板同源，逐条真机执行）"
 python3 - "$ROOT/assets/web/index.html" "$WORK" <<'PYEOF'
