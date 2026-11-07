@@ -66,6 +66,7 @@ chk "/api/status ok"            "$WORK/st.json" "d.get('ok')" "True"
 chktrue "/api/status 有 queue.pending" "$WORK/st.json" "'pending' in d.get('queue',{})"
 chktrue "/api/status 无 battery（USB 直供）" "$WORK/st.json" "'battery' not in d"
 chktrue "/api/status 有 channels" "$WORK/st.json" "isinstance(d.get('channels'),list)"
+chktrue "/api/status 有 keepalive" "$WORK/st.json" "isinstance(d.get('keepalive'),dict)"
 
 get /api/sys sy.json
 chk "/api/sys ok"               "$WORK/sy.json" "d.get('ok')" "True"
@@ -77,7 +78,22 @@ chktrue "/api/sys.temps 无 bms/battery" "$WORK/sy.json" "not any(k in d.get('te
 chktrue "/api/sys.storage 非空"    "$WORK/sy.json" "len(d.get('storage') or [])>=1"
 chktrue "/api/sys.nets 非空"       "$WORK/sy.json" "len(d.get('nets') or [])>=1"
 chktrue "/api/sys 无 battery"      "$WORK/sy.json" "'battery' not in d"
+chktrue "/api/sys.usb 非空（取内核 functions，不取出厂组合名）" "$WORK/sy.json" "bool(d.get('usb'))"
 chktrue "/api/sys.uptime 存在"     "$WORK/sy.json" "bool(d.get('uptime'))"
+chktrue "/api/sys.keepalive 存在"  "$WORK/sy.json" "isinstance(d.get('keepalive'),dict)"
+
+get /api/keepalive ka.json
+chktrue "/api/keepalive 状态字段齐全" "$WORK/ka.json" "all(k in d for k in ('enabled','running','phase','hipri','intervalSec','target','iface'))"
+chktrue "/api/keepalive ok（面板 loadKa 依赖它）" "$WORK/ka.json" "d.get('ok')"
+chktrue "/api/keepalive 网卡候选非空" "$WORK/ka.json" "isinstance(d.get('ifaces'),list) and len(d.get('ifaces') or [])>=1"
+
+# 维护页的保活配置卡片必须随 APK 内置页面发出来（改了 HTML 忘了重新构建会在这里暴露）
+get / ui.html
+if grep -q 'id="kaInterval"' "$WORK/ui.html" && grep -q 'function saveKaCfg' "$WORK/ui.html"; then
+    ok "面板 HTML 含保活配置卡片"
+else
+    bad "面板 HTML 缺少保活配置卡片"
+fi
 
 for ep in messages outbox logs; do
     get "/api/$ep?limit=5" "$ep.json"
@@ -146,6 +162,11 @@ post /api/maint/cpufreq "{\"max\":$CURMAX,\"min\":$CURMIN,\"auto\":false}" cpuap
 chktrue "/api/maint/cpufreq 幂等应用 ok" "$WORK/cpuap.json" "d.get('ok')"
 post /api/maint/cpufreq '{"max":123456,"min":200000,"auto":false}' cpubad.json
 chktrue "/api/maint/cpufreq 非法频率被拒绝" "$WORK/cpubad.json" "not d.get('ok')"
+# 恢复进入测试前的限频维持状态：上面幂等应用带 auto=false 会把开关写成"关闭"（历史坑：
+# 跑一次 e2e，面板里 CPU 限频就显示被关）。用 setEnabled 重放原状态。
+ORIGCPU=$(jval "$WORK/cpu.json" "str(bool(d.get('enabled'))).lower()")
+post /api/maint/cpufreq "{\"setEnabled\":$ORIGCPU}" cpures.json
+chktrue "/api/maint/cpufreq 恢复原始维持状态($ORIGCPU)" "$WORK/cpures.json" "d.get('ok')"
 
 echo "== 写接口（非破坏）"
 post /api/messages/test '{"peer":"10086","body":"panel-e2e"}' mt.json

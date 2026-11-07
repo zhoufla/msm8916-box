@@ -150,6 +150,7 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
       <button data-v="msgs">短信</button>
       <button data-v="wifi">WiFi</button>
       <button data-v="net">蜂窝</button>
+      <button data-v="ddns">DDNS</button>
       <button data-v="sys">系统</button>
       <button data-v="maint">维护</button>
       <button data-v="cmd">命令</button>
@@ -182,10 +183,6 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
         <h3>系统与运行</h3>
         <div id="ovSys"></div>
       </div>
-    </div>
-    <div class="card" style="margin-top:10px">
-      <h3>网卡</h3>
-      <div id="ovNics"><div class="empty">加载中…</div></div>
     </div>
     <div class="card" style="margin-top:10px">
       <h3>启用中的通道</h3>
@@ -256,6 +253,24 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
         </div>
         <div class="sep"></div>
         <div class="hint">保存后立即生效：新消息按新通道投递。设备名与面板登录信息在「维护」页统一修改，保存时一并提交。</div>
+      </div>
+      <div class="card" style="margin-top:12px">
+        <h3>转发规则（决定哪条短信投到哪、哪条丢弃）</h3>
+        <div class="row" style="margin-bottom:6px">
+          <label class="fld" style="max-width:300px"><span>未命中任何规则时</span>
+            <select id="rulesDefault">
+              <option value="all">投递到全部启用通道（默认，向后兼容）</option>
+              <option value="drop">丢弃（仍入库，面板可人工重发）</option>
+            </select>
+          </label>
+          <span style="flex:1 1 auto"></span>
+          <button class="btn sm" onclick="rulesTestDialog()">匹配测试</button>
+          <button class="btn sm" onclick="validateRules()">校验规则</button>
+        </div>
+        <label class="fld"><span>规则 JSON（按数组顺序求值；一条规则内字段 AND、列表内 OR；随「保存配置」一并提交）</span>
+          <textarea id="rulesJson" rows="8" style="font-family:monospace" placeholder="[]"></textarea>
+        </label>
+        <div class="hint" id="rulesHint">字段：name 必填且唯一 / enabled / peer[] 发件人正则 / body[] 正文正则 / channels[] 通道名 / priority 0-1000 / stop 命中即停 / action relay|drop / template 钉钉模板覆盖 / from,to "HH:mm" 时段（支持跨零点）。示例：{"name":"otp","peer":["^106\\d+$"],"body":["验证码|code"],"channels":["运维群"],"priority":100,"stop":true}</div>
       </div>
       <div class="toolbar" style="margin-top:12px">
         <button class="btn sm" onclick="loadRelay()">刷新</button>
@@ -528,6 +543,37 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
   </section>
 
   <!-- 升级 -->
+  <section class="view" id="v-ddns">
+    <div class="card">
+      <h3>DDNS 动态域名</h3>
+      <div class="row" style="margin-top:8px">
+        <div class="sw" id="swDd" onclick="toggleDd()"><i></i></div>
+        <span class="hint">把当前可达地址推给 DDNS 服务：station 模式报 NAT 出口 IPv4；IPv6 直报全球单播地址（蜂窝 IPv4 是运营商 CGNAT，不可达时不误报）。变更才更新，每条记录独立比对与推送，失败走告警推送。服务商与 Token 公共一份，解析记录可加多条。</span>
+      </div>
+      <div class="grid g2">
+        <label class="fld"><span>服务商</span><select id="ddProvider"><option value="duckdns">DuckDNS（免费子域）</option><option value="cloudflare">Cloudflare（自有域名）</option></select></label>
+        <label class="fld"><span>检查间隔（分钟，1–1440）</span><input id="ddInterval" type="number" min="1" max="1440" value="10"></label>
+        <label class="fld"><span>Token / API Token</span><input id="ddToken" type="password" placeholder="留空 = 保持已保存的 Token"></label>
+        <label class="fld"><span>Cloudflare Zone（自有域名，DuckDNS 留空）</span><input id="ddZone" placeholder="example.com"></label>
+      </div>
+      <div class="sep"></div>
+      <div class="row" style="justify-content:space-between">
+        <span class="hint" style="font-weight:600">解析记录（每条 = 域名 + 网卡 + 记录类型）</span>
+        <span><button class="btn sm" onclick="addRecRow()">+ 添加记录</button> <button class="btn sm" onclick="delRecRow()">删除选中</button></span>
+      </div>
+      <table id="ddRecTbl">
+        <thead><tr><th style="width:28px"></th><th>域名</th><th>网卡（留空=自动：蜂窝优先）</th><th>记录类型</th><th>当前 v6</th><th>当前 v4</th><th>已推送</th><th>状态</th></tr></thead>
+        <tbody id="ddRecBody"></tbody>
+      </table>
+      <div class="hint">网卡名如 rmnet0 / wlan0 / ccmni0；记录类型 v4=仅 IPv4、v6=仅 IPv6、both=两个都推。Cloudflare 按 A/AAAA 记录自动增改（TTL 300）；DuckDNS 一条记录同时带 v4/v6。每次更新都计入系统日志。</div>
+      <div class="row" style="margin-top:8px">
+        <button class="btn sm primary" id="ddSave" onclick="saveDdCfg(this)">保存 DDNS 配置</button>
+        <button class="btn sm" onclick="ddnsNow(this)">立即更新</button>
+        <span class="hint" id="ddStatus"></span>
+      </div>
+    </div>
+  </section>
+
   <section class="view" id="v-upd">
     <div class="grid g2">
       <div class="card">
@@ -594,10 +640,12 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
           <label class="fld"><span>面板端口（1024–65535，80/443 绑不了）</span><input id="cfgPort" type="number" min="1024" max="65535"></label>
           <label class="fld"><span>面板账号</span><input id="cfgUser"></label>
           <label class="fld"><span>面板密码</span><input id="cfgPass" type="password"></label>
+          <label class="fld"><span>访问令牌（Bearer token，留空=仅账号密码）<a href="javascript:void(0)" onclick="genToken()" style="margin-left:6px">生成</a></span><input id="cfgToken" autocomplete="off" spellcheck="false"></label>
+          <label class="fld"><span>CORS 允许来源（逗号分隔 origin 或 *，空=关闭跨域）</span><input id="cfgCors" placeholder="http://homeassistant.local:8123"></label>
         </div>
         <div class="row">
           <div class="sw" id="swWeb" onclick="toggleWeb()"><i></i></div>
-          <span class="hint">面板随服务启动（改端口/账号后保存会重启面板，页面需用新地址重新打开）</span>
+          <span class="hint">面板随服务启动（改端口/账号/令牌后保存会重启面板，页面需用新地址重新打开）</span>
         </div>
         <div class="sep"></div>
         <button class="btn primary" onclick="saveConfig()">保存登录信息</button>
@@ -616,6 +664,40 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
         </div>
         <button class="btn sm" onclick="saveMaintCfg(this)">保存配置</button>
         <div class="hint" style="margin-top:8px">单面板、单端口、单套凭据：8080 的账号管所有入口，helper 不对外监听。</div>
+      </div>
+
+      <div class="card">
+        <h3>LTE 保活</h3>
+        <div id="kaStatus" class="hint">读取中…</div>
+        <div class="row" style="margin-top:8px">
+          <div class="sw" id="swKa" onclick="toggleKa()"><i></i></div>
+          <span class="hint">WiFi 做上行时额外保持一条 MOBILE_HIPRI 链路，空闲态定时发包，避免基带漏寻呼导致短信延迟</span>
+        </div>
+        <div class="grid g2">
+          <label class="fld"><span>间隔（秒，5–3600）</span><input id="kaInterval" type="number" min="5" max="3600" value="10"></label>
+          <label class="fld"><span>目标地址（ICMP）</span><input id="kaTarget" placeholder="223.5.5.5"></label>
+          <label class="fld"><span>移动数据网卡（下拉选择）</span><select id="kaIface"></select></label>
+          <label class="fld"><span>apn-restore（毫秒，60000–2000000000）</span><input id="kaRestore" type="number" min="60000" max="2000000000" value="2000000000"></label>
+        </div>
+        <button class="btn sm primary" id="kaSave" onclick="saveKaCfg(this)">保存保活配置</button>
+        <div class="hint" style="margin-top:8px">10 秒间隔约 0.5 MB/天；SIM 没有流量或不想耗流量时关掉。保存后经 <code>RelayService.wake()</code> 立即生效，不用重启服务。</div>
+      </div>
+
+      <div class="card">
+        <h3>告警推送</h3>
+        <div class="row" style="margin-top:8px">
+          <div class="sw" id="swAl" onclick="toggleAl()"><i></i></div>
+          <span class="hint">体检判据（modem SSR / RIL / SIM / 内存 / 面板 / 进程）、流量配额、保活重建等状态翻转时经通道推送（合成 ALERT 消息，复用短信转发通道，不进转发记录）</span>
+        </div>
+        <div class="grid g2">
+          <label class="fld"><span>检查间隔（分钟，1–1440）</span><input id="alInterval" type="number" min="1" max="1440" value="5"></label>
+          <label class="fld"><span>持续异常重复提醒（小时，1–168）</span><input id="alRemind" type="number" min="1" max="168" value="6"></label>
+          <label class="fld"><span>流量配额（GB，自上次清零累计，0=关闭）</span><input id="alTraffic" type="number" min="0" max="10000" value="0"></label>
+          <label class="fld"><span>低电量阈值（%，仅未充电时，0=关闭）</span><input id="alBattery" type="number" min="0" max="100" value="0"></label>
+          <label class="fld" style="grid-column:1/-1"><span>推送通道（逗号分隔通道名，留空=全部启用通道）</span><input id="alChannels" placeholder="运维群"></label>
+        </div>
+        <button class="btn sm primary" id="alSave" onclick="saveAlCfg(this)">保存告警配置</button>
+        <div class="hint" style="margin-top:8px">状态翻转才推送 + 每 remindH 小时重复提醒一次 + 恢复时通知；保活重建/恢复是即时事件，不受检查间隔限制。</div>
       </div>
 
       <div class="card">
@@ -770,6 +852,17 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
     <button class="btn ghost" onclick="closeModal()">取消</button>
   </div>
 </div></div>
+<div class="modal" id="rulesModal"><div class="box">
+  <h4>规则匹配测试</h4>
+  <label class="fld"><span>发件人号码</span><input id="rtPeer" placeholder="1069xxxxxxxx 或 95588"></label>
+  <label class="fld"><span>正文</span><textarea id="rtBody" rows="3" placeholder="【某某】您的验证码是 123456，10 分钟内有效。"></textarea></label>
+  <div class="row">
+    <button class="btn primary" onclick="runRulesTest()">测试</button>
+    <button class="btn ghost" onclick="closeRulesTest()">关闭</button>
+    <span class="hint" id="rtHint"></span>
+  </div>
+  <div id="rtResult"></div>
+</div></div>
 <div id="toast"></div>
 
 <script>
@@ -838,14 +931,47 @@ function loadView(v){
   else if(v==='wifi') loadWifi();
   else if(v==='net') loadNet();
   else if(v==='upd') loadUpd();
-  else if(v==='maint'){ loadMaint(); loadConfig(); }
+  else if(v==='maint'){ loadMaint(); loadConfig(); loadKa(); loadAl(); }
+  else if(v==='ddns'){ loadDd(); }
   else if(v==='cmd'){ renderCmdPresets(); }
 }
 function reloadAll(){ loadView(state.view); }
 
 /* ---------- 概览：设备整体状况 ---------- */
 var ovTimer=null;
+function kaRow(ka){
+  ka=ka||{};
+  if(!ka.enabled) return kv('LTE 保活','<span class="chip">关闭</span>');
+  var ok=ka.hipri&&ka.lastPingOk;
+  var cls=ok?'ok':(ka.hipri?'wait':'err');
+  var txt=!ka.running?'未运行':(ka.hipri?(ka.lastPingOk?'正常':'探测失败'):'重连中');
+  var sub=esc(ka.ip||'无地址')+' · '+esc(String(ka.intervalSec||'-'))+'s';
+  if(ka.fails) sub+=' · 连续失败 '+ka.fails;
+  return kv('LTE 保活','<span class="chip '+cls+'">'+txt+'</span> · '+sub);
+}
+function renderStatus(d){
+  state.status=d;
+  var chips='';
+  for(var i=0;i<d.channels.length;i++){
+    var c=d.channels[i];
+    chips+='<span class="chip '+(c.active?'ok':'')+'">'+esc(c.name)+' · '+
+      (c.type==='dingtalk'?'钉钉':'webhook')+(c.active?'':' · 停用')+'</span>';
+  }
+  if(!chips) chips='<span class="hint">还没有配置通道，去「短信 → 转发配置」添加</span>';
+  if(d.queue.lastError) chips+='<div class="hint" style="margin-top:8px;color:#f87171">最近错误：'+esc(d.queue.lastError)+'</div>';
+  $('chChips').innerHTML=chips;
+  if(!d.panel.running){
+    $('chChips').innerHTML+='<div class="hint" style="margin-top:8px;color:#fbbf24">面板进程状态异常，重启服务试试</div>';
+  }
+}
 function loadOverview(){
+  lastSysFetch=Date.now();
+  loadOverviewSys();
+  api('GET','/api/status',null,function(d){
+    if(d.ok) renderStatus(d);
+  });
+}
+function loadOverviewSys(){
   api('GET','/api/sys',null,function(d){
     if(!d.ok){ $('devSub').textContent='面板异常：'+(d.message||d.error||''); $('liveDot').className='dot off'; return; }
     state.sys=d;
@@ -891,7 +1017,8 @@ function loadOverview(){
       kv('运营商',esc(d.operator||'-'))+kv('服务状态',esc(d.service||'-'))+
       kv('SIM',esc(d.sim||'-')+((d.simOperator&&d.simOperator)?' · '+esc(d.simOperator):''))+
       kv('网络',esc(d.netType||'-')+(s.tech?' · '+esc(s.tech):''))+
-      kv('信号',(s.dbm?s.dbm+' dBm':'未知')+' <span class="chip '+(s.level>=3?'ok':s.level>0?'wait':'err')+'">'+esc(s.text||'')+'</span>');
+      kv('信号',(s.dbm?s.dbm+' dBm':'未知')+' <span class="chip '+(s.level>=3?'ok':s.level>0?'wait':'err')+'">'+esc(s.text||'')+'</span>')+
+      kaRow(d.keepalive);
     // 系统与运行
     var sw=d.webEnabled===false?'<span class="chip err">面板关闭</span>':'';
     $('ovSys').innerHTML=
@@ -900,30 +1027,7 @@ function loadOverview(){
       kv('基带',esc(d.baseband||'-'))+
       kv('序列号','<span class="mono">'+esc(d.serial||'-')+'</span>')+
       kv('运行时长',esc(d.uptime))+
-      kv('USB 模式','<span class="mono">'+esc(d.adbd||'-')+'</span>')+sw;
-    // 网卡
-    var nt='<table><tr><th>网卡</th><th>地址</th><th>MAC</th></tr>';
-    for(var j=0;j<(d.nets||[]).length;j++){
-      var n=d.nets[j];
-      nt+='<tr><td>'+esc(n.name)+'</td><td class="mono">'+esc(n.ip)+'</td><td class="mono">'+esc(n.mac||'-')+'</td></tr>';
-    }
-    $('ovNics').innerHTML=nt+'</table>';
-  });
-  api('GET','/api/status',null,function(d){
-    if(!d.ok) return;
-    state.status=d;
-    var chips='';
-    for(var i=0;i<d.channels.length;i++){
-      var c=d.channels[i];
-      chips+='<span class="chip '+(c.active?'ok':'')+'">'+esc(c.name)+' · '+
-        (c.type==='dingtalk'?'钉钉':'webhook')+(c.active?'':' · 停用')+'</span>';
-    }
-    if(!chips) chips='<span class="hint">还没有配置通道，去「短信 → 转发配置」添加</span>';
-    if(d.queue.lastError) chips+='<div class="hint" style="margin-top:8px;color:#f87171">最近错误：'+esc(d.queue.lastError)+'</div>';
-    $('chChips').innerHTML=chips;
-    if(!d.panel.running){
-      $('chChips').innerHTML+='<div class="hint" style="margin-top:8px;color:#fbbf24">面板进程状态异常，重启服务试试</div>';
-    }
+      kv('USB 模式','<span class="mono">'+esc(d.usb||d.adbd||'-')+'</span>')+sw;
   });
   api('GET','/api/logs?limit=8',null,function(d){
     if(!d.ok) return;
@@ -1011,6 +1115,7 @@ function loadRelay(){
         (m.code?'<span class="chip acc">验证码 '+esc(m.code)+'</span>':'')+'</div>'+
         '<div class="body clip" title="'+esc(m.body)+'" onclick="this.classList.toggle(\'open\')">'+esc(m.body)+'</div>'+
         '<div class="acts">'+chs+
+        (!m.deliveries.length?'<span class="chip err" title="没有生成任何投递记录">'+(m.rule?'已丢弃 · 规则 '+esc(m.rule):'未投递')+'</span>':(m.rule?'<span class="chip" title="命中转发规则">'+esc(m.rule)+' →</span>':''))+
         (m.code?'<button class="btn sm ghost" onclick="copyText(\''+esc(m.code)+'\')">复制验证码</button>':'')+
         '<button class="btn sm ghost" onclick="retryMsg('+m.id+')">重发</button>'+
         '<button class="btn sm ghost" onclick="delMsg('+m.id+')">删除</button>'+
@@ -1147,7 +1252,13 @@ function loadConfig(){
     $('cfgPort').value=state.cfg.web.port||8080;
     $('cfgUser').value=state.cfg.web.user||'admin';
     $('cfgPass').value=state.cfg.web.pass||'admin';
+    $('cfgToken').value=state.cfg.web.token||'';
+    $('cfgCors').value=(state.cfg.web.cors||[]).join(', ');
     $('swWeb').className='sw'+(state.cfg.web.enabled!==false?' on':'');
+    if(!state.cfg.rules) state.cfg.rules=[];
+    if(!state.cfg.rulesDefault) state.cfg.rulesDefault='all';
+    $('rulesDefault').value=state.cfg.rulesDefault;
+    $('rulesJson').value=JSON.stringify(state.cfg.rules,null,2);
     renderChannels();
   });
 }
@@ -1232,6 +1343,69 @@ function applyChannel(){
   if(!c.name){ toast('名称不能为空', true); return; }
   closeModal(); renderChannels();
 }
+/* ---------- 规则引擎 ---------- */
+function rulesChannels(){
+  var names=[];
+  for(var i=0;i<state.cfg.channels.length;i++){
+    var n=state.cfg.channels[i].name;
+    if(n&&names.indexOf(n)<0) names.push(n);
+  }
+  return names;
+}
+function parseRulesEditor(){
+  var rules=JSON.parse($('rulesJson').value||'[]');
+  return rules.length?rules:[];
+}
+function validateRules(){
+  var rules;
+  try{ rules=parseRulesEditor(); }catch(e){ toast('规则 JSON 解析失败：'+e.message,true); return; }
+  api('POST','/api/rules/validate',{rules:rules,channels:rulesChannels()},function(d){
+    $('rulesHint').innerHTML=d.ok?
+      '<span style="color:#34d399">✓ 校验通过（'+rules.length+' 条规则）</span>':
+      '<span style="color:#f87171">'+esc(d.error||d.message||'校验失败')+'</span>';
+    toast(d.ok?'规则校验通过':(d.error||'校验失败'), !d.ok);
+  });
+}
+function rulesTestDialog(){
+  $('rulesModal').className='modal on';
+  $('rtResult').innerHTML=''; $('rtHint').textContent='';
+}
+function closeRulesTest(){ $('rulesModal').className='modal'; }
+function runRulesTest(){
+  var rules;
+  try{ rules=parseRulesEditor(); }catch(e){ $('rtHint').textContent='规则 JSON 解析失败：'+e.message; return; }
+  $('rtHint').textContent='测试中…';
+  api('POST','/api/rules/test',{peer:$('rtPeer').value.trim(),body:$('rtBody').value,
+    rules:rules,rulesDefault:$('rulesDefault').value,channels:rulesChannels()},function(d){
+    if(!d.ok){
+      $('rtHint').textContent='';
+      $('rtResult').innerHTML='<div class="hint" style="color:#f87171">'+esc(d.error||d.message||'测试失败')+'</div>';
+      return;
+    }
+    $('rtHint').textContent=d.message||'';
+    var h='';
+    if(d.drop){
+      h+='<div class="hint" style="color:#f87171">✂ 丢弃：不进转发队列（仍入库，面板可人工重发）</div>';
+    }else{
+      h+='<div class="hint">命中：'+(d.matched&&d.matched.length?esc(d.matched.join(' → ')):'（未命中任何规则，走默认）')+'</div>';
+      h+='<div class="hint">投递目标：'+(d.targets&&d.targets.length?
+        d.targets.map(function(t){ return esc(t.ch)+(t.prio?'（优先级 '+t.prio+'）':''); }).join('、'):'（无）')+'</div>';
+      if(d.rule) h+='<div class="hint">主规则：<b>'+esc(d.rule)+'</b></div>';
+    }
+    $('rtResult').innerHTML=h;
+  });
+}
+function genToken(){
+  var s='';
+  if(window.crypto&&crypto.getRandomValues){
+    var a=new Uint8Array(16);crypto.getRandomValues(a);
+    for(var i=0;i<a.length;i++)s+=('0'+a[i].toString(16)).slice(-2);
+  }else{
+    for(var i=0;i<32;i++)s+='0123456789abcdef'.charAt(Math.floor(Math.random()*16));
+  }
+  $('cfgToken').value=s;
+  toast('已生成随机令牌，点「保存登录信息」后生效');
+}
 function saveConfig(){
   var cfg=state.cfg;
   cfg.device=$('cfgDevice').value.trim();
@@ -1239,9 +1413,20 @@ function saveConfig(){
   cfg.web.port=parseInt($('cfgPort').value,10)||8080;
   cfg.web.user=$('cfgUser').value.trim()||'admin';
   cfg.web.pass=$('cfgPass').value;
+  cfg.web.token=$('cfgToken').value.trim();
+  var corsRaw=($('cfgCors').value||'').replace(/，/g,',');
+  cfg.web.cors=corsRaw.trim()?corsRaw.split(',').map(function(s){return s.trim();}).filter(function(s){return !!s;}):[];
   if(cfg.web.enabled===undefined) cfg.web.enabled=true;
   // 清掉本地标记字段
   for(var i=0;i<cfg.channels.length;i++) delete cfg.channels[i].__dirty;
+  // 规则段随配置一起提交；解析失败直接中止保存（后端还会再做一次严格校验）
+  try{
+    var rules=JSON.parse($('rulesJson').value||'[]');
+    cfg.rules=rules.length?rules:[];
+  }catch(e){
+    toast('规则 JSON 解析失败：'+e.message,true); return;
+  }
+  cfg.rulesDefault=$('rulesDefault').value||'all';
   api('POST','/api/config',cfg,function(d){
     toast(d.ok?d.message:(d.message||d.error||'保存失败'), !d.ok);
     if(d.ok&&d.restarted){
@@ -1312,7 +1497,7 @@ function loadSys(){
     $('sysTraffic').innerHTML=
       kv('总接收',fmtBytes(tf.rx))+kv('总发送',fmtBytes(tf.tx))+
       kv('移动网收',fmtBytes(tf.mobileRx))+kv('移动网发',fmtBytes(tf.mobileTx))+
-      kv('USB 模式',esc(d.adbd||'-'));
+      kv('USB 模式',esc(d.usb||d.adbd||'-'));
     var nt='<table><tr><th>网卡</th><th>地址</th><th>MAC</th></tr>';
     for(var q=0;q<(d.nets||[]).length;q++){
       var n=d.nets[q];
@@ -1629,6 +1814,200 @@ function saveMaintCfg(btn){
     healthIntervalMin:Number($('mhGap').value)||30},function(d){
     if(btn) btn.disabled=false;
     toast(d.ok?d.message:(d.message||d.error||'失败'),!d.ok);
+  });
+}
+
+/* ---------- 维护：LTE 保活 ---------- */
+function loadKa(){
+  api('GET','/api/keepalive',null,function(d){
+    if(!d.ok){ $('kaStatus').innerHTML='<span class="chip err">读取失败</span>'; return; }
+    var chip=d.enabled
+      ? (d.running?'<span class="chip ok">运行</span>':'<span class="chip wait">等待</span>')
+      : '<span class="chip">关闭</span>';
+    var sub;
+    if(d.enabled){
+      sub=esc(d.phase||'')+(d.ip?' · <span class="mono">'+esc(d.ip)+'</span>':'')
+        +' · ping '+Number(d.pings||0)+' 次 / 成功 '+Number(d.oks||0)+' 次';
+      if(Number(d.fails||0)>0) sub+=' · 连续失败 '+Number(d.fails);
+      if(d.lastError) sub+=' · <span style="color:#c33">'+esc(d.lastError)+'</span>';
+    }else{
+      sub='未启用';
+    }
+    $('kaStatus').innerHTML=chip+' <span class="hint">'+sub+'</span>';
+    $('swKa').className='sw'+(d.enabled?' on':'');
+    $('kaInterval').value=d.intervalSec||10;
+    $('kaTarget').value=d.target||'223.5.5.5';
+    var cur=d.iface||'rmnet0', list=d.ifaces||[];
+    if(list.indexOf(cur)<0) list=[cur].concat(list);
+    var sel=$('kaIface'), h='';
+    for(var i=0;i<list.length;i++) h+='<option value="'+esc(list[i])+'">'+esc(list[i])+'</option>';
+    sel.innerHTML=h; sel.value=cur;
+    $('kaRestore').value=d.restoreMs||2000000000;
+  });
+}
+function toggleKa(){
+  var on=$('swKa').className.indexOf('on')<0;
+  $('swKa').className='sw'+(on?' on':'');
+  toast(on?'保活将启用（记得保存）':'保活将关闭（记得保存）');
+}
+function saveKaCfg(btn){
+  var iv=parseInt($('kaInterval').value,10);
+  if(!(iv>=5&&iv<=3600)){ toast('间隔需在 5–3600 秒之间', true); return; }
+  var rs=parseInt($('kaRestore').value,10);
+  if(!(rs>=60000&&rs<=2000000000)){ toast('apn-restore 需在 60000–2000000000 之间', true); return; }
+  var target=$('kaTarget').value.trim()||'223.5.5.5';
+  var iface=$('kaIface').value.trim()||'rmnet0';
+  var ok=/^[0-9A-Za-z._:-]{1,64}$/;
+  if(!ok.test(target)||!ok.test(iface)){ toast('目标/网卡只能包含字母、数字和 . - _ :', true); return; }
+  if(btn) btn.disabled=true;
+  // 先取最新配置再改 keepalive 段：避免页面上的旧值把别处刚改的配置覆盖回去
+  api('GET','/api/config',null,function(cfg){
+    if(!cfg.ok){ if(btn) btn.disabled=false; toast(cfg.message||cfg.error||'读取配置失败', true); return; }
+    var root;
+    try{ root=JSON.parse(cfg.json); }
+    catch(e){ if(btn) btn.disabled=false; toast('配置解析失败', true); return; }
+    root.keepalive={enabled:$('swKa').className.indexOf('on')>=0,
+      intervalSec:iv,target:target,iface:iface,restoreMs:rs};
+    api('POST','/api/config',root,function(d){
+      if(btn) btn.disabled=false;
+      toast(d.ok?d.message:(d.message||d.error||'保存失败'),!d.ok);
+      if(d.ok) loadKa();
+    });
+  });
+}
+/* ---------- 维护：告警推送 ---------- */
+function loadAl(){
+  api('GET','/api/config',null,function(d){
+    if(!d.ok) return;
+    var a={};
+    try{ var root=JSON.parse(d.json); a=root.alerts||{}; }catch(e){ return; }
+    $('swAl').className='sw'+(a.enabled?' on':'');
+    $('alInterval').value=a.intervalMin||5;
+    $('alRemind').value=a.remindH||6;
+    $('alTraffic').value=a.trafficGb||0;
+    $('alBattery').value=a.batteryPct||0;
+    $('alChannels').value=(a.channels||[]).join(', ');
+  });
+}
+function toggleAl(){
+  var on=$('swAl').className.indexOf('on')<0;
+  $('swAl').className='sw'+(on?' on':'');
+  toast(on?'告警将启用（记得保存）':'告警将关闭（记得保存）');
+}
+function saveAlCfg(btn){
+  var iv=parseInt($('alInterval').value,10);
+  if(!(iv>=1&&iv<=1440)){ toast('检查间隔需在 1–1440 分钟之间', true); return; }
+  var rh=parseInt($('alRemind').value,10);
+  if(!(rh>=1&&rh<=168)){ toast('提醒间隔需在 1–168 小时之间', true); return; }
+  var tg=parseInt($('alTraffic').value,10)||0;
+  if(!(tg>=0&&tg<=10000)){ toast('流量配额需在 0–10000 GB 之间', true); return; }
+  var bp=parseInt($('alBattery').value,10)||0;
+  if(!(bp>=0&&bp<=100)){ toast('电量阈值需在 0–100 之间', true); return; }
+  var chs=($('alChannels').value||'').replace(/，/g,',');
+  var list=chs.trim()?chs.split(',').map(function(s){return s.trim();}).filter(function(s){return !!s;}):[];
+  if(btn) btn.disabled=true;
+  // 先取最新配置再改 alerts 段：避免页面上的旧值把别处刚改的配置覆盖回去
+  api('GET','/api/config',null,function(cfg){
+    if(!cfg.ok){ if(btn) btn.disabled=false; toast(cfg.message||cfg.error||'读取配置失败', true); return; }
+    var root;
+    try{ root=JSON.parse(cfg.json); }
+    catch(e){ if(btn) btn.disabled=false; toast('配置解析失败', true); return; }
+    root.alerts={enabled:$('swAl').className.indexOf('on')>=0,
+      channels:list,remindH:rh,intervalMin:iv,trafficGb:tg,batteryPct:bp};
+    api('POST','/api/config',root,function(d){
+      if(btn) btn.disabled=false;
+      toast(d.ok?'告警配置已保存':(d.message||d.error||'保存失败'),!d.ok);
+    });
+  });
+}
+/* ---------- DDNS 页：多条解析记录 ---------- */
+function recRowHtml(r){
+  r=r||{};
+  var fam=r.family||'both';
+  var pushed=[r.lastV4?('v4 '+r.lastV4):'',r.lastV6?('v6 '+r.lastV6):''].filter(Boolean).join(' / ');
+  var st=r.lastError?('✗ '+esc(r.lastError)):(r.lastOkAt?('✓ '+new Date(r.lastOkAt).toLocaleString()):'—');
+  return '<tr><td><input type="checkbox" class="ddChk"></td>'
+    +'<td><input class="ddRd" value="'+esc(r.domain||'')+'" placeholder="mybox / dd.example.com"></td>'
+    +'<td><input class="ddRi" value="'+esc(r.iface||'')+'" placeholder="留空=自动"></td>'
+    +'<td><select class="ddRf"><option value="both"'+(fam==='both'?' selected':'')+'>IPv4 + IPv6</option>'
+    +'<option value="v4"'+(fam==='v4'?' selected':'')+'>仅 IPv4</option>'
+    +'<option value="v6"'+(fam==='v6'?' selected':'')+'>仅 IPv6</option></select></td>'
+    +'<td class="hint">'+esc(r.curV6||'—')+'</td>'
+    +'<td class="hint">'+esc(r.curV4||'—')+'</td>'
+    +'<td class="hint">'+esc(pushed||'—')+'</td>'
+    +'<td class="hint">'+st+'</td></tr>';
+}
+function loadDd(){
+  api('GET','/api/ddns',null,function(d){
+    if(!d.ok){ $('ddStatus').textContent=d.message||d.error||''; return; }
+    $('swDd').className='sw'+(d.enabled?' on':'');
+    $('ddProvider').value=d.provider||'duckdns';
+    $('ddInterval').value=d.intervalMin||10;
+    $('ddZone').value=d.zone||'';
+    var rs=d.records||[];
+    if(!rs.length) rs=[{domain:'',iface:'',family:'both'}];
+    var h='';
+    for(var i=0;i<rs.length;i++) h+=recRowHtml(rs[i]);
+    $('ddRecBody').innerHTML=h;
+    $('ddStatus').textContent=(d.enabled?'已启用':'未启用')+(d.curV6?(' · 本机当前 v6 '+d.curV6):'');
+  });
+}
+function addRecRow(){
+  var b=$('ddRecBody');
+  if(b.getElementsByTagName('tr').length>=20){ toast('解析记录最多 20 条', true); return; }
+  b.innerHTML+=recRowHtml({});
+}
+function delRecRow(){
+  var rows=$('ddRecBody').getElementsByTagName('tr');
+  for(var i=rows.length-1;i>=0;i--){
+    var cb=rows[i].getElementsByClassName('ddChk')[0];
+    if(cb&&cb.checked) rows[i].parentNode.removeChild(rows[i]);
+  }
+}
+function toggleDd(){
+  var on=$('swDd').className.indexOf('on')<0;
+  $('swDd').className='sw'+(on?' on':'');
+  toast(on?'DDNS 将启用（记得保存）':'DDNS 将关闭（记得保存）');
+}
+function saveDdCfg(btn){
+  var iv=parseInt($('ddInterval').value,10);
+  if(!(iv>=1&&iv<=1440)){ toast('检查间隔需在 1–1440 分钟之间', true); return; }
+  var pv=$('ddProvider').value;
+  var zone=($('ddZone').value||'').trim();
+  if($('swDd').className.indexOf('on')>=0&&pv==='cloudflare'&&!zone){ toast('Cloudflare 需要填写 Zone', true); return; }
+  var recs=[], rows=$('ddRecBody').getElementsByTagName('tr');
+  for(var i=0;i<rows.length;i++){
+    var dom=rows[i].getElementsByClassName('ddRd')[0].value.trim();
+    if(!dom) continue;
+    var ifc=rows[i].getElementsByClassName('ddRi')[0].value.trim();
+    if(ifc&&!/^[A-Za-z0-9._:-]{1,20}$/.test(ifc)){ toast('第 '+(i+1)+' 行网卡名只能含字母、数字与 . _ : -', true); return; }
+    recs.push({domain:dom,iface:ifc,family:rows[i].getElementsByClassName('ddRf')[0].value});
+  }
+  if($('swDd').className.indexOf('on')>=0&&!recs.length){ toast('至少需要一条解析记录', true); return; }
+  if(recs.length>20){ toast('解析记录最多 20 条', true); return; }
+  if(btn) btn.disabled=true;
+  // 先取最新配置再改 ddns 段：避免页面旧值覆盖别处刚改的配置；Token 留空=保持原值
+  api('GET','/api/config',null,function(cfg){
+    if(!cfg.ok){ if(btn) btn.disabled=false; toast(cfg.message||cfg.error||'读取配置失败', true); return; }
+    var root;
+    try{ root=JSON.parse(cfg.json); }
+    catch(e){ if(btn) btn.disabled=false; toast('配置解析失败', true); return; }
+    root.ddns={enabled:$('swDd').className.indexOf('on')>=0,
+      provider:pv,token:($('ddToken').value||'').trim(),
+      zone:zone,intervalMin:iv,records:recs};
+    api('POST','/api/config',root,function(d){
+      if(btn) btn.disabled=false;
+      toast(d.ok?'DDNS 配置已保存':(d.message||d.error||'保存失败'),!d.ok);
+      if(d.ok) loadDd();
+    });
+  });
+}
+function ddnsNow(btn){
+  if(btn) btn.disabled=true;
+  api('POST','/api/ddns/now',null,function(d){
+    if(btn) btn.disabled=false;
+    toast(d.ok?'已在后台执行，稍后刷新看结果':(d.message||d.error||'执行失败'),!d.ok);
+    if(d.ok) window.setTimeout(loadDd,4000);
   });
 }
 /* ---------- 命令页：常用命令 + 执行历史 ---------- */
@@ -2078,11 +2457,58 @@ function doFactoryReset(btn){
   });
 }
 
+/* ---------- 概览 SSE 实时化 ---------- */
+var sse=null, sseRetry=0, lastSysFetch=0, sseLastEv=-1, msgReloadT=0;
+function sseActive(){ return !!sse && sse.readyState===1; }
+function sseStart(){
+  if(sse || !window.EventSource) return;
+  var q='';
+  try{
+    var t=(state.cfg&&state.cfg.web&&state.cfg.web.token)||'';
+    if(t) q='?access_token='+encodeURIComponent(t);
+  }catch(e){}
+  try{ sse=new EventSource('/api/events'+q); }
+  catch(e){ sse=null; return; }
+  sse.addEventListener('status', function(ev){
+    try{
+      var d=JSON.parse(ev.data);
+      if(d&&d.ok){
+        renderStatus(d);
+        // 新短信联动：queue.events 只在入库时增长（重试不涨）；正看短信页就 1s 内刷新
+        var n=(d.queue&&d.queue.events!=null)?d.queue.events:null;
+        if(n!=null){
+          if(sseLastEv>=0&&n>sseLastEv&&state.view==='msgs'&&!msgReloadT)
+            msgReloadT=window.setTimeout(function(){ msgReloadT=0; if(state.view==='msgs') loadMsgView(false); },1000);
+          sseLastEv=n;
+        }
+      }
+    }catch(e){}
+  });
+  sse.onerror=function(){
+    sseStop();
+    if(!sseRetry) toast('实时推送断开，概览退回轮询');
+    sseRetry=window.setTimeout(function(){ sseRetry=0; sseStart(); },5000);
+  };
+}
+function sseStop(){
+  if(sseRetry){ window.clearTimeout(sseRetry); sseRetry=0; }
+  if(sse){ try{ sse.close(); }catch(e){} sse=null; }
+}
+document.addEventListener('visibilitychange',function(){
+  if(document.hidden) sseStop();
+  else { loadOverview(); sseStart(); }
+});
+
 /* ---------- 启动 ---------- */
 loadOverview();
+sseStart();
 setInterval(function(){
   if(document.hidden) return;
-  if(state.view==='overview') loadOverview();
+  if(state.view==='overview'){
+    // SSE 正常时 status 由事件推送，sys/logs（root 采集，代价高）降频到 60s 补一次
+    if(!sseActive()) loadOverview();
+    else if(Date.now()-lastSysFetch>=60000){ lastSysFetch=Date.now(); loadOverviewSys(); }
+  }
   else if(state.view==='msgs') loadMsgView(false);
   else if(state.view==='wifi') loadWifi();
   else if(state.view==='net') loadNet();

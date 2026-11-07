@@ -33,10 +33,19 @@ public final class AppConfig {
     public String device = Build.MODEL;
     public List<Channel> channels = new ArrayList<Channel>();
 
+    // 规则引擎（P0-A）：按数组顺序求值，未命中任何规则时按 rulesDefault 兜底
+    // （all=投全部通道，向后兼容；drop=丢弃但入库）。规则经 Router.route() 求值。
+    public List<Router.Rule> rules = new ArrayList<Router.Rule>();
+    public String rulesDefault = "all";
+
     public boolean webEnabled = true;
     public int webPort = 8080;
     public String webUser = "admin";
     public String webPass = "admin";
+    /** 面板访问令牌：非空时 Authorization: Bearer <token> / ?access_token= 可代替账号密码。 */
+    public String webToken = "";
+    /** CORS 允许的 Origin 白名单（空=不发 CORS 头，"*"=任意来源）。 */
+    public List<String> webCors = new ArrayList<String>();
 
     // 在线升级：mode = off | github | manifest
     public String updateMode = "github";
@@ -61,6 +70,82 @@ public final class AppConfig {
     public boolean simLockEnabled = false;
     public String simLockAction = "log";
     public String simLockList = "";
+
+    // LTE 短信保活：WiFi 做默认上行时额外保持一条 MOBILE_HIPRI 链路，
+    // 每 intervalSec 秒在 rmnet0 上发一个 ICMP 包，避免基带空闲态漏寻呼。
+    // 代价约 0.5 MB/天，需要 SIM 有数据流量；不需要/流量紧张时置 false。
+    public boolean kaEnabled = true;
+    public int kaIntervalSec = 10;
+    public String kaTarget = "223.5.5.5";
+    public String kaIface = "rmnet0";
+    // ConnectivityService$FeatureUser 的过期时间（android.telephony.apn-restore），
+    // 缺省 60000ms，这里放到 int 上限附近（约 23 天）。
+    public int kaRestoreMs = 2000000000;
+    /** 告警推送（P0-C）：状态翻转才推 + remindH 提醒 + 恢复通知；channels 空=全部启用通道。 */
+    public boolean alertEnabled = false;
+    public List<String> alertChannels = new ArrayList<String>();
+    public int alertRemindH = 6;
+    public int alertIntervalMin = 5;
+    public int alertTrafficGb = 0;
+    public int alertBatteryPct = 0;
+    public boolean alertKeepalive = true;
+    /** DDNS 动态域名（P0-E）：变更才更新 + intervalMin 兜底；失败接告警推送。 */
+    public boolean ddnsEnabled = false;
+    public String ddnsProvider = "duckdns";
+    public String ddnsDomain = "";
+    public String ddnsToken = "";
+    public String ddnsZone = "";
+    public int ddnsIntervalMin = 10;
+    public boolean ddnsInsecure = false;
+    /** IPv6 优先网卡名（旧单条格式迁移源；新格式放 records[].iface） */
+    public String ddnsIface = "";
+    /** 记录类型：both（默认）/ v4 / v6（旧单条格式迁移源） */
+    public String ddnsFamily = "both";
+    /** 多条解析记录（v2 格式）：每条可选网卡与记录类型；服务商/Token/Zone 公共。 */
+    public List<DdnsRecord> ddnsRecords = new ArrayList<DdnsRecord>();
+
+    /** 一条 DDNS 解析记录：domain 记录名，iface 空=自动（蜂窝优先），family=v4|v6|both。 */
+    public static class DdnsRecord {
+        public String domain = "";
+        public String iface = "";
+        public String family = "both";
+
+        public DdnsRecord() {
+        }
+
+        public DdnsRecord(String domain, String iface, String family) {
+            this.domain = domain == null ? "" : domain.trim();
+            this.iface = normIface(iface);
+            this.family = normFamily(family);
+        }
+
+        public boolean wantV4() {
+            return !"v6".equals(family);
+        }
+
+        public boolean wantV6() {
+            return !"v4".equals(family);
+        }
+
+        public JSONObject toJson() {
+            JSONObject o = new JSONObject();
+            try {
+                o.put("domain", domain);
+                o.put("iface", iface);
+                o.put("family", family);
+            } catch (Throwable ignored) {
+            }
+            return o;
+        }
+
+        public static String normIface(String s) {
+            return DdnsLogic.normIface(s);
+        }
+
+        public static String normFamily(String s) {
+            return DdnsLogic.normFamily(s);
+        }
+    }
 
     public static AppConfig load(Context ctx) {
         AppConfig c = new AppConfig();
@@ -154,7 +239,7 @@ public final class AppConfig {
         return ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
 
-    private void parse(String json) {
+    void parse(String json) {
         try {
             JSONObject root = new JSONObject(json);
             String d = root.optString("device", "");
@@ -169,6 +254,17 @@ public final class AppConfig {
                 if (u.length() > 0) webUser = u;
                 String pw = web.optString("pass", "");
                 if (pw.length() > 0) webPass = pw;
+                webToken = web.optString("token", "").trim();
+                if (webToken.length() > 128) webToken = webToken.substring(0, 128);
+                List<String> corsRaw = new ArrayList<String>();
+                Object cv = web.opt("cors");
+                if (cv instanceof JSONArray) {
+                    JSONArray ca = (JSONArray) cv;
+                    for (int i = 0; i < ca.length(); i++) corsRaw.add(String.valueOf(ca.opt(i)));
+                } else if (cv instanceof String) {
+                    for (String s : ((String) cv).split("[,，]")) corsRaw.add(s);
+                }
+                webCors = Http.normalizeCors(corsRaw);
             }
 
             JSONObject up = root.optJSONObject("update");
@@ -220,6 +316,87 @@ public final class AppConfig {
                     if (raw.length() > 0) simLockList = raw;
                 }
             }
+
+            JSONObject ka = root.optJSONObject("keepalive");
+            if (ka != null) {
+                kaEnabled = ka.optBoolean("enabled", kaEnabled);
+                int iv = ka.optInt("intervalSec", kaIntervalSec);
+                if (iv >= 5 && iv <= 3600) kaIntervalSec = iv;
+                String t = ka.optString("target", "");
+                if (t.trim().length() > 0) kaTarget = t.trim();
+                String n = ka.optString("iface", "");
+                if (n.trim().length() > 0) kaIface = n.trim();
+                int rm = ka.optInt("restoreMs", kaRestoreMs);
+                if (rm >= 60000 && rm <= 2000000000) kaRestoreMs = rm;
+            }
+
+            JSONObject al = root.optJSONObject("alerts");
+            if (al != null) {
+                alertEnabled = al.optBoolean("enabled", alertEnabled);
+                List<String> names = new ArrayList<String>();
+                Object cv = al.opt("channels");
+                if (cv instanceof JSONArray) {
+                    JSONArray ac = (JSONArray) cv;
+                    for (int i = 0; i < ac.length(); i++) {
+                        String n = String.valueOf(ac.opt(i)).trim();
+                        if (n.length() > 0 && !names.contains(n)) names.add(n);
+                    }
+                } else if (cv instanceof String) {
+                    for (String n : ((String) cv).split("[,，;；\\s]+")) {
+                        n = n.trim();
+                        if (n.length() > 0 && !names.contains(n)) names.add(n);
+                    }
+                }
+                alertChannels = names;
+                int rh = al.optInt("remindH", alertRemindH);
+                if (rh >= 1 && rh <= 168) alertRemindH = rh;
+                int im = al.optInt("intervalMin", alertIntervalMin);
+                if (im >= 1 && im <= 1440) alertIntervalMin = im;
+                int tg = al.optInt("trafficGb", alertTrafficGb);
+                if (tg >= 0 && tg <= 10000) alertTrafficGb = tg;
+                int bp = al.optInt("batteryPct", alertBatteryPct);
+                if (bp >= 0 && bp <= 100) alertBatteryPct = bp;
+                alertKeepalive = al.optBoolean("keepalive", alertKeepalive);
+            }
+
+            JSONObject ddns = root.optJSONObject("ddns");
+            if (ddns != null) {
+                ddnsEnabled = ddns.optBoolean("enabled", ddnsEnabled);
+                String dp = ddns.optString("provider", ddnsProvider);
+                ddnsProvider = "cloudflare".equals(dp) ? "cloudflare" : "duckdns";
+                ddnsDomain = ddns.optString("domain", "").trim();
+                String dt = ddns.optString("token", "");
+                if (dt.trim().length() > 0) ddnsToken = dt.trim();
+                ddnsZone = ddns.optString("zone", "").trim();
+                int di = ddns.optInt("intervalMin", ddnsIntervalMin);
+                if (di >= 1 && di <= 1440) ddnsIntervalMin = di;
+                ddnsInsecure = ddns.optBoolean("insecure", ddnsInsecure);
+                ddnsIface = ddns.optString("iface", "").trim();
+                if (!ddnsIface.matches("[A-Za-z0-9._:-]{1,20}")) ddnsIface = "";
+                String df = ddns.optString("family", ddnsFamily);
+                ddnsFamily = ("v4".equals(df) || "v6".equals(df)) ? df : "both";
+                JSONArray drs = ddns.optJSONArray("records");
+                if (drs != null) {
+                    ddnsRecords = new ArrayList<DdnsRecord>();
+                    for (int i = 0; i < drs.length() && ddnsRecords.size() < 20; i++) {
+                        JSONObject ro = drs.optJSONObject(i);
+                        if (ro == null) continue;
+                        String dom = ro.optString("domain", "").trim();
+                        if (dom.length() == 0) continue;
+                        ddnsRecords.add(new DdnsRecord(dom, ro.optString("iface", ""),
+                                ro.optString("family", "both")));
+                    }
+                } else if (ddnsDomain.length() > 0) {
+                    // 旧单条格式迁移：domain/iface/family → records[0]
+                    ddnsRecords = new ArrayList<DdnsRecord>();
+                    ddnsRecords.add(new DdnsRecord(ddnsDomain, ddnsIface, ddnsFamily));
+                }
+            }
+
+            JSONArray rr = root.optJSONArray("rules");
+            if (rr != null) rules = Router.parseRules(rr);
+            String rd = root.optString("rulesDefault", "");
+            if ("all".equals(rd) || "drop".equals(rd)) rulesDefault = rd;
 
             JSONArray arr = root.optJSONArray("channels");
             if (arr == null) return;
@@ -308,6 +485,11 @@ public final class AppConfig {
             web.put("port", meta == null ? 8080 : meta.webPort);
             web.put("user", meta == null ? "admin" : meta.webUser);
             web.put("pass", meta == null ? "admin" : meta.webPass);
+            web.put("token", meta == null ? "" : meta.webToken);
+            JSONArray corsArr = new JSONArray();
+            List<String> corsL = meta == null ? new ArrayList<String>() : meta.webCors;
+            for (String s : corsL) corsArr.put(s);
+            web.put("cors", corsArr);
             root.put("web", web);
             JSONObject up = new JSONObject();
             up.put("mode", meta == null ? "github" : meta.updateMode);
@@ -337,9 +519,54 @@ public final class AppConfig {
             }
             sl.put("list", wl);
             root.put("simLock", sl);
+            JSONObject ka = new JSONObject();
+            ka.put("enabled", meta == null || meta.kaEnabled);
+            ka.put("intervalSec", meta == null ? 10 : meta.kaIntervalSec);
+            ka.put("target", meta == null ? "223.5.5.5" : meta.kaTarget);
+            ka.put("iface", meta == null ? "rmnet0" : meta.kaIface);
+            ka.put("restoreMs", meta == null ? 2000000000 : meta.kaRestoreMs);
+            root.put("keepalive", ka);
+            JSONObject al = new JSONObject();
+            al.put("enabled", meta != null && meta.alertEnabled);
+            JSONArray alch = new JSONArray();
+            List<String> aln = meta == null ? new ArrayList<String>() : meta.alertChannels;
+            for (int i = 0; i < aln.size(); i++) alch.put(aln.get(i));
+            al.put("channels", alch);
+            al.put("remindH", meta == null ? 6 : meta.alertRemindH);
+            al.put("intervalMin", meta == null ? 5 : meta.alertIntervalMin);
+            al.put("trafficGb", meta == null ? 0 : meta.alertTrafficGb);
+            al.put("batteryPct", meta == null ? 0 : meta.alertBatteryPct);
+            al.put("keepalive", meta == null || meta.alertKeepalive);
+            root.put("alerts", al);
+            JSONObject dd = new JSONObject();
+            dd.put("enabled", meta != null && meta.ddnsEnabled);
+            dd.put("provider", meta == null ? "duckdns" : meta.ddnsProvider);
+            dd.put("domain", meta == null ? "" : meta.ddnsDomain);
+            dd.put("token", meta == null ? "" : meta.ddnsToken);
+            dd.put("zone", meta == null ? "" : meta.ddnsZone);
+            dd.put("intervalMin", meta == null ? 10 : meta.ddnsIntervalMin);
+            dd.put("insecure", meta != null && meta.ddnsInsecure);
+            dd.put("iface", meta == null ? "" : meta.ddnsIface);
+            dd.put("family", meta == null ? "both" : meta.ddnsFamily);
+            JSONArray drs = new JSONArray();
+            if (meta != null) {
+                for (int i = 0; i < meta.ddnsRecords.size(); i++) {
+                    drs.put(meta.ddnsRecords.get(i).toJson());
+                }
+            }
+            dd.put("records", drs);
+            root.put("ddns", dd);
             JSONArray arr = new JSONArray();
             for (int i = 0; i < chs.size(); i++) arr.put(chs.get(i).toJson());
             root.put("channels", arr);
+            if (meta != null) {
+                JSONArray rl = new JSONArray();
+                for (int i = 0; i < meta.rules.size(); i++) {
+                    rl.put(Router.ruleToJson(meta.rules.get(i)));
+                }
+                root.put("rules", rl);
+                root.put("rulesDefault", meta.rulesDefault);
+            }
             return root.toString(2);
         } catch (Throwable t) {
             return "{}";
@@ -350,6 +577,9 @@ public final class AppConfig {
         return "{\n" +
                 "  \"device\": \"" + Build.MODEL + "\",\n" +
                 "  \"web\": {\"enabled\": true, \"port\": 8080, \"user\": \"admin\", \"pass\": \"admin\"},\n" +
+                "  \"keepalive\": {\"enabled\": true, \"intervalSec\": 10, \"target\": \"223.5.5.5\", \"iface\": \"rmnet0\"},\n" +
+                "  \"rulesDefault\": \"all\",\n" +
+                "  \"rules\": [],\n" +
                 "  \"channels\": [\n" +
                 "    {\n" +
                 "      \"name\": \"运维群\",\n" +

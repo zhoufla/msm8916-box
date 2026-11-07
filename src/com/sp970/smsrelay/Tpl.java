@@ -4,7 +4,8 @@ package com.sp970.smsrelay;
  * 转发模板渲染。
  *
  * 默认模板就三行：发件人号码 / 正文 / 设备名，够看又不啰嗦。
- * 占位符：{peer} 发件人、{body} 正文、{device} 设备名、{tag} 通道标签、{time} 收信时间。
+ * 占位符：{peer} 发件人、{body} 正文、{code} 验证码（无则替换为空）、
+ * {device} 设备名、{tag} 通道标签、{time} 收信时间。
  */
 public final class Tpl {
 
@@ -13,8 +14,15 @@ public final class Tpl {
 
     public static String render(String tpl, String peer, String body,
                                 String device, String tag, String time) {
+        return render(tpl, peer, body, "", device, tag, time);
+    }
+
+    /** code：SmsReceiver 提取的验证码（可为空）；模板占位符 {code}。 */
+    public static String render(String tpl, String peer, String body, String code,
+                                String device, String tag, String time) {
         String t = (tpl == null || tpl.trim().length() == 0) ? Channel.DEFAULT_TEMPLATE : tpl;
-        t = t.replace("{peer}", nz(peer))
+        t = t.replace("{code}", nz(code))
+                .replace("{peer}", nz(peer))
                 .replace("{body}", nz(body))
                 .replace("{device}", nz(device))
                 .replace("{tag}", nz(tag))

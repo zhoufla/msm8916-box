@@ -42,11 +42,17 @@ public class SmsReceiver extends BroadcastReceiver {
             Db db = new Db(ctx);
             long id = db.insertEvent(e);
             AppConfig cfg = AppConfig.load(ctx);
-            java.util.List<String> chs = cfg.names();
-            db.ensureDeliveries(id, chs);
-
-            android.util.Log.i("SmsRelay", "recv " + e.peer + " len=" + e.body.length()
-                    + " code=" + e.code + " channels=" + chs.size());
+            Router.Result r = Router.route(e, cfg.rules, cfg.names(), cfg.rulesDefault);
+            if (r.drop) {
+                db.setEventRule(id, r.rule);
+                android.util.Log.i("SmsRelay", "recv " + e.peer + " len=" + e.body.length()
+                        + " code=" + e.code + " rule=" + r.rule + " action=drop");
+            } else {
+                db.ensureTargets(id, r.targets);
+                android.util.Log.i("SmsRelay", "recv " + e.peer + " len=" + e.body.length()
+                        + " code=" + e.code + " rule=" + r.rule
+                        + " targets=" + r.targets.size());
+            }
 
             ctx.startService(new Intent(ctx, RelayService.class));
         } catch (Throwable t) {

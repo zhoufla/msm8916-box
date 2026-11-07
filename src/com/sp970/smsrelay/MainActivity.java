@@ -155,7 +155,7 @@ public class MainActivity extends Activity {
 
         Db db = new Db(this);
         long id = db.insertEvent(e);
-        db.ensureDeliveries(id, AppConfig.load(this).names());
+        db.ensureTargets(id, Router.routeAll(AppConfig.load(this).names()).targets);
         startService(new Intent(this, RelayService.class));
         toast("已插入测试消息");
         updateStatus();

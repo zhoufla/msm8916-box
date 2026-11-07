@@ -12,7 +12,11 @@ import org.json.JSONObject;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.Socket;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -24,6 +28,14 @@ public final class WebPanel {
     private static final Object LOCK = new Object();
     private static volatile WebPanel instance;
     private static final Map<String, byte[]> ASSETS = new HashMap<String, byte[]>();
+
+    // SSE（概览实时化）：每条连接占一个 panel-conn 线程，连接数设上限；
+    // 寿命封顶 30 分钟，之后推 bye 让客户端重连，防僵尸连接越积越多。
+    private static final java.util.concurrent.atomic.AtomicInteger SSE_CONN =
+            new java.util.concurrent.atomic.AtomicInteger(0);
+    private static final int SSE_MAX = 3;
+    private static final long SSE_LIFETIME_MS = 30 * 60 * 1000L;
+    private static final long SSE_HEARTBEAT_MS = 15 * 1000L;
 
     /** 请求都转给当前实例，方便改端口后原地重启。 */
     private static final Http.Handler FORWARD = new Http.Handler() {
@@ -39,13 +51,17 @@ public final class WebPanel {
     private final Http http;
     private final String user;
     private final String pass;
+    private final String token;
+    private final List<String> cors;
     private Db db;
 
-    private WebPanel(Context app, Http http, String user, String pass) {
+    private WebPanel(Context app, Http http, String user, String pass, String token, List<String> cors) {
         this.app = app;
         this.http = http;
         this.user = user;
         this.pass = pass;
+        this.token = token == null ? "" : token;
+        this.cors = cors == null ? new ArrayList<String>() : cors;
     }
 
     /** 面板常驻，复用同一个 SQLiteOpenHelper，别按请求新建连接。 */
@@ -75,7 +91,7 @@ public final class WebPanel {
                 Http h = new Http(p, FORWARD);
                 if (h.start()) {
                     instance = new WebPanel(ctx.getApplicationContext(), h,
-                            cfg.webUser, cfg.webPass);
+                            cfg.webUser, cfg.webPass, cfg.webToken, cfg.webCors);
                     Logs.add("panel", "面板已启动，端口 " + h.port()
                             + (p != base ? "（" + base + " 被占用，顺延）" : ""));
                     return "面板已启动，端口 " + h.port();
@@ -119,12 +135,25 @@ public final class WebPanel {
     // ---------- 路由 ----------
 
     private Http.Resp route(Http.Req req) throws Exception {
-        if (!authorized(req)) {
-            Http.Resp r = Http.Resp.error(401, "需要登录");
-            r.headers.put("WWW-Authenticate", "Basic realm=\"msm8916-box\"");
-            return r;
+        // CORS 预检不携带 Authorization，配置了允许来源就直接放行（其余请求一律照旧鉴权）
+        if ("OPTIONS".equals(req.method) && !cors.isEmpty()) {
+            Http.Resp pre = Http.Resp.text(204, "text/plain", "");
+            applyCors(pre, req);
+            return pre;
         }
 
+        Http.Resp r;
+        if (!authorized(req)) {
+            r = Http.Resp.error(401, "需要登录");
+            r.headers.put("WWW-Authenticate", "Basic realm=\"msm8916-box\"");
+        } else {
+            r = serve(req);
+        }
+        applyCors(r, req);
+        return r;
+    }
+
+    private Http.Resp serve(Http.Req req) throws Exception {
         String p = req.path;
         if (p == null || p.length() == 0) p = "/";
 
@@ -147,18 +176,47 @@ public final class WebPanel {
         return Http.Resp.error(404, "没有这个页面");
     }
 
+    /** Basic 账号密码之外，配置了 web.token 时也接受 Bearer 头与 ?access_token=（EventSource 用）。 */
     private boolean authorized(Http.Req req) {
         String h = req.headers.get("authorization");
-        if (h == null || h.length() < 7) return false;
-        if (!h.toLowerCase().startsWith("basic ")) return false;
-        try {
-            String raw = new String(Base64.decode(h.substring(6).trim(), Base64.DEFAULT), "UTF-8");
-            int c = raw.indexOf(':');
-            if (c < 0) return false;
-            return raw.substring(0, c).equals(user) && raw.substring(c + 1).equals(pass);
-        } catch (Throwable t) {
-            return false;
+        if (h == null) {
+            return Http.tokenMatches(token, req.q("access_token", ""));
         }
+        String hl = h.toLowerCase();
+        if (hl.startsWith("bearer ")) {
+            return Http.tokenMatches(token, h.substring(7).trim());
+        }
+        if (hl.startsWith("basic ")) {
+            try {
+                String raw = new String(Base64.decode(h.substring(6).trim(), Base64.DEFAULT), "UTF-8");
+                int c = raw.indexOf(':');
+                if (c < 0) return false;
+                return raw.substring(0, c).equals(user) && raw.substring(c + 1).equals(pass);
+            } catch (Throwable t) {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    /** 请求带 Origin 且配置了允许来源时补 CORS 头（401/正常响应都要带，浏览器才看得到）。 */
+    private void applyCors(Http.Resp resp, Http.Req req) {
+        String origin = req.headers.get("origin");
+        if (cors.isEmpty() || !Http.corsAllowed(cors, origin)) return;
+        resp.headers.put("Access-Control-Allow-Origin", origin);
+        resp.headers.put("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        resp.headers.put("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Token");
+        resp.headers.put("Access-Control-Max-Age", "600");
+        resp.headers.put("Vary", "Origin");
+    }
+
+    private static String corsJoin(List<String> cors) {
+        StringBuilder sb = new StringBuilder();
+        for (String s : cors) {
+            if (sb.length() > 0) sb.append(", ");
+            sb.append(s);
+        }
+        return sb.toString();
     }
 
     private Http.Resp api(Http.Req req, String path) throws Exception {
@@ -166,6 +224,23 @@ public final class WebPanel {
         JSONObject p = params(req);
 
         if ("/api/status".equals(path)) return Http.Resp.json(status(p).toString());
+        if ("/api/events".equals(path)) return events(req);
+        if ("/api/ddns".equals(path)) {
+            if (!"GET".equals(req.method)) throw new IllegalArgumentException("需要 GET");
+            return Http.Resp.json(Ddns.status(app).toString());
+        }
+        if ("/api/ddns/now".equals(path)) {
+            if (!"POST".equals(req.method)) throw new IllegalArgumentException("需要 POST");
+            Ddns.updateNow(app);
+            return Http.Resp.json("{\"ok\":true,\"message\":\"已在后台执行，稍后刷新\"}");
+        }
+        if ("/api/keepalive".equals(path)) {
+            if (post) MobileKeepalive.wake();
+            JSONObject ka = MobileKeepalive.status(app);
+            ka.put("ok", true);
+            ka.put("ifaces", MobileKeepalive.ifaces(app));
+            return Http.Resp.json(ka.toString());
+        }
         if ("/api/sys".equals(path)) return Http.Resp.json(sys());
         if ("/api/logs".equals(path)) return Http.Resp.json(logs(p));
         if ("/api/messages".equals(path)) return Http.Resp.json(messages(p));
@@ -207,6 +282,14 @@ public final class WebPanel {
         if ("/api/send".equals(path)) {
             if (!post) throw new IllegalArgumentException("需要 POST");
             return Http.Resp.json(send(p));
+        }
+        if ("/api/rules/validate".equals(path)) {
+            if (!post) throw new IllegalArgumentException("需要 POST");
+            return Http.Resp.json(rulesValidate(p).toString());
+        }
+        if ("/api/rules/test".equals(path)) {
+            if (!post) throw new IllegalArgumentException("需要 POST");
+            return Http.Resp.json(rulesTest(p).toString());
         }
         if ("/api/update".equals(path)) return Http.Resp.json(updateState());
         if ("/api/update/check".equals(path)) {
@@ -460,6 +543,106 @@ public final class WebPanel {
 
     // ---------- 各接口 ----------
 
+    /**
+     * SSE：连上先推全量 status，之后每秒比对一次，变更即推（≤1s 延迟），
+     * 无变更 15s 发一次注释心跳。status() 只读缓存/SQLite，1Hz 采样无 root 开销。
+     */
+    /** SSE 变更比对的 key：剔除随时间恒变的字段（uptimeMs 毫秒级/uptime 分钟级），
+     *  否则 1s 快照恒不相等，15s 心跳永远不会触发。推送的 payload 仍带全量字段。 */
+    private static final String[] SSE_VOLATILE =
+            {"uptime", "uptimeMs", "lastPingAt", "lastOkAt", "pings", "oks"};
+
+    private static String sseCmpKey(JSONObject o) {
+        try {
+            JSONObject c = new JSONObject(o.toString());
+            stripVolatile(c);
+            return c.toString();
+        } catch (Throwable t) {
+            return o.toString();
+        }
+    }
+
+    /** 递归剔除随时间恒变、不代表状态翻转的字段（含 keepalive 计数/时间戳）。 */
+    private static void stripVolatile(JSONObject o) {
+        for (int i = 0; i < SSE_VOLATILE.length; i++) o.remove(SSE_VOLATILE[i]);
+        java.util.Iterator<String> it = o.keys();
+        while (it.hasNext()) {
+            Object v = o.opt(it.next());
+            if (v instanceof JSONObject) stripVolatile((JSONObject) v);
+        }
+    }
+
+    /** SSE 对端断开探测：短暂读一次，-1=客户端已关（FIN，槽位必须释放）；
+     *  超时=正常；异常=RST/断开。客户端被杀后 FIN 到达，写 CLOSE_WAIT 仍"成功"，
+     *  不主动探测会占住槽位直到 30min 寿命到期。 */
+    private static boolean peerGone() {
+        Socket s = Http.currentSocket();
+        if (s == null || s.isClosed()) return true;
+        try {
+            int old = s.getSoTimeout();
+            s.setSoTimeout(50);
+            try {
+                if (s.getInputStream().read() == -1) return true;
+            } finally {
+                s.setSoTimeout(old);
+            }
+            return false;
+        } catch (java.net.SocketTimeoutException te) {
+            return false;
+        } catch (Throwable t) {
+            return true;
+        }
+    }
+
+    private Http.Resp events(Http.Req p) throws Exception {
+        if (!"GET".equals(p.method)) throw new IllegalArgumentException("SSE 需要 GET");
+        if (SSE_CONN.get() >= SSE_MAX) {
+            return Http.Resp.error(503, "SSE 连接已达上限（" + SSE_MAX + "），稍后再试");
+        }
+        final WebPanel w = this;
+        return Http.Resp.stream(new Http.Streamer() {
+            @Override
+            public void stream(OutputStream out) throws Exception {
+                SSE_CONN.incrementAndGet();
+                try {
+                    long end = System.currentTimeMillis() + SSE_LIFETIME_MS;
+                    String lastKey;
+                    try { lastKey = sseCmpKey(w.status(null)); }
+                    catch (Throwable t) { lastKey = "{\"ok\":false}"; }
+                    out.write("retry: 3000\n\n".getBytes("UTF-8"));
+                    out.write(("event: status\ndata: " + w.status(null) + "\n\n").getBytes("UTF-8"));
+                    out.flush();
+                    long lastWrite = System.currentTimeMillis();
+                    while (System.currentTimeMillis() < end) {
+                        Thread.sleep(1000);
+                        if (peerGone()) break;
+                        JSONObject snap;
+                        try { snap = w.status(null); }
+                        catch (Throwable t) { continue; }
+                        long now = System.currentTimeMillis();
+                        String key = sseCmpKey(snap);
+                        if (!key.equals(lastKey)) {
+                            out.write(("event: status\ndata: " + snap + "\n\n").getBytes("UTF-8"));
+                            out.flush();
+                            lastKey = key;
+                            lastWrite = now;
+                        } else if (now - lastWrite >= SSE_HEARTBEAT_MS) {
+                            out.write(": hb\n\n".getBytes("UTF-8"));
+                            out.flush();
+                            lastWrite = now;
+                        }
+                    }
+                    try {
+                        out.write("event: bye\ndata: {}\n\n".getBytes("UTF-8"));
+                        out.flush();
+                    } catch (Throwable ignored) {}
+                } finally {
+                    SSE_CONN.decrementAndGet();
+                }
+            }
+        });
+    }
+
     private JSONObject status(JSONObject p) throws Exception {
         AppConfig cfg = AppConfig.load(app);
         Db db = db();
@@ -506,6 +689,7 @@ public final class WebPanel {
 
         // USB 直供无电池，不再上报电量
         o.put("signal", new JSONObject().put("level", SysInfo.signalLevel()));
+        o.put("keepalive", MobileKeepalive.status(app));
         o.put("webEnabled", cfg.webEnabled);
         return o;
     }
@@ -595,7 +779,9 @@ public final class WebPanel {
         o.put("file", f.getAbsolutePath());
         o.put("fileExists", f.exists());
         o.put("web", new JSONObject().put("enabled", cfg.webEnabled)
-                .put("port", cfg.webPort).put("user", cfg.webUser).put("pass", cfg.webPass));
+                .put("port", cfg.webPort).put("user", cfg.webUser).put("pass", cfg.webPass)
+                .put("token", cfg.webToken)
+                .put("cors", corsJoin(cfg.webCors)));
         return Http.Resp.json(o.toString());
     }
 
@@ -650,6 +836,76 @@ public final class WebPanel {
             }
         }
 
+        // 规则段（P0-A）：老页面/局部保存不带 rules 时回填当前生效值，防止整段被抹
+        // （同 maint/simLock 的保护思路）。规则编辑器保存时始终带 rules（空数组=清空）
+        // 与 rulesDefault，走上面的分支做严格校验。
+        if (root.has("rules")) {
+            java.util.List<String> chNames = new java.util.ArrayList<String>();
+            for (int i = 0; i < arr.length(); i++) {
+                chNames.add(arr.getJSONObject(i).optString("name", ""));
+            }
+            Router.validateRulesJson(root.optJSONArray("rules"), chNames);
+        } else if (effective.has("rules")) {
+            root.put("rules", effective.getJSONArray("rules"));
+        }
+        // 告警段（P0-C）：老页面不带 alerts 时回填当前生效值，防止整段被抹
+        if (!root.has("alerts") && effective.has("alerts")) {
+            root.put("alerts", effective.getJSONObject("alerts"));
+        }
+        // DDNS 段：records[] 校验 + 老 Token 兜底 + 旧单条格式迁移 + 老页面回填
+        if (root.has("ddns")) {
+            JSONObject dd = root.optJSONObject("ddns");
+            if (dd != null && dd.optBoolean("enabled", false)) {
+                String tok = dd.optString("token", "").trim();
+                if (tok.length() == 0 && effective.has("ddns")) {
+                    // 面板 Token 框留空 = 保持原值，避免每次保存都要重贴 Token
+                    dd.put("token", effective.getJSONObject("ddns").optString("token", ""));
+                }
+                if ("cloudflare".equals(dd.optString("provider", "duckdns"))
+                        && dd.optString("zone", "").trim().length() == 0) {
+                    throw new IllegalArgumentException("Cloudflare 需要填写 Zone");
+                }
+                JSONArray rs = dd.optJSONArray("records");
+                if (rs == null) {
+                    // 旧单条格式（domain/iface/family 顶层）→ 迁移成一条记录
+                    String od = dd.optString("domain", "").trim();
+                    if (od.length() == 0) throw new IllegalArgumentException("DDNS 至少需要一条解析记录");
+                    rs = new JSONArray();
+                    JSONObject ro = new JSONObject();
+                    ro.put("domain", od);
+                    ro.put("iface", dd.optString("iface", ""));
+                    ro.put("family", dd.optString("family", "both"));
+                    rs.put(ro);
+                    dd.put("records", rs);
+                }
+                int n = rs.length();
+                if (n == 0) throw new IllegalArgumentException("DDNS 至少需要一条解析记录");
+                if (n > 20) throw new IllegalArgumentException("DDNS 解析记录最多 20 条");
+                for (int i = 0; i < n; i++) {
+                    JSONObject ro = rs.optJSONObject(i);
+                    if (ro == null) throw new IllegalArgumentException("DDNS 记录 #" + (i + 1) + " 格式错误");
+                    if (ro.optString("domain", "").trim().length() == 0)
+                        throw new IllegalArgumentException("DDNS 记录 #" + (i + 1) + " 缺少域名");
+                    String fam = ro.optString("family", "both");
+                    if (!"v4".equals(fam) && !"v6".equals(fam) && !"both".equals(fam))
+                        throw new IllegalArgumentException("DDNS 记录 #" + (i + 1) + " 记录类型无效：" + fam);
+                    String ifc = ro.optString("iface", "").trim();
+                    if (ifc.length() > 0 && !ifc.matches("[A-Za-z0-9._:-]{1,20}"))
+                        throw new IllegalArgumentException("DDNS 记录 #" + (i + 1) + " 网卡名无效：" + ifc);
+                }
+            }
+        } else if (effective.has("ddns")) {
+            root.put("ddns", effective.getJSONObject("ddns"));
+        }
+        if (root.has("rulesDefault")) {
+            String rd = root.optString("rulesDefault", "all");
+            if (!"all".equals(rd) && !"drop".equals(rd)) {
+                throw new IllegalArgumentException("rulesDefault 只能是 all / drop");
+            }
+        } else if (effective.has("rulesDefault")) {
+            root.put("rulesDefault", effective.optString("rulesDefault", "all"));
+        }
+
         AppConfig old = AppConfig.load(app);
         // ⚠ 必须存处理后的 root（端口校验、maint/simLock 回填都在 root 上），
         // 存原始 body 的话这些保护全部白做
@@ -660,7 +916,9 @@ public final class WebPanel {
         boolean needRestart = old.webPort != now.webPort
                 || old.webEnabled != now.webEnabled
                 || !old.webUser.equals(now.webUser)
-                || !old.webPass.equals(now.webPass);
+                || !old.webPass.equals(now.webPass)
+                || !old.webToken.equals(now.webToken)
+                || !old.webCors.equals(now.webCors);
 
         String msg = "配置已保存";
         if (needRestart) {
@@ -801,14 +1059,70 @@ public final class WebPanel {
         e.code = SmsEvent.extractCode(e.body);
         Db db = db();
         long id = db.insertEvent(e);
-        db.ensureDeliveries(id, cfg.names());
+        Router.Result r = Router.routeAll(cfg.names());
+        db.ensureTargets(id, r.targets);
         RelayService.wake(app);
-        Logs.add("panel", "注入测试消息 evId=" + id + " 通道=" + cfg.names());
+        Logs.add("panel", "注入测试消息 evId=" + id + " 目标=" + r.targets.size());
         JSONObject o = new JSONObject();
         o.put("ok", true);
         o.put("id", id);
-        o.put("message", "已注入，通道数 " + cfg.names().size());
+        o.put("message", "已注入，目标 " + r.targets.size());
         return o.toString();
+    }
+
+    /** 规则校验时的通道名单：优先用请求里带的（面板未保存的改动也算数），否则当前配置。 */
+    private java.util.List<String> channelNamesForRules(JSONObject p) {
+        java.util.List<String> names = new java.util.ArrayList<String>();
+        JSONArray ca = p.optJSONArray("channels");
+        if (ca != null) {
+            for (int i = 0; i < ca.length(); i++) {
+                String n = ca.optString(i, "").trim();
+                if (n.length() > 0 && !names.contains(n)) names.add(n);
+            }
+        }
+        if (names.isEmpty()) {
+            AppConfig cfg = AppConfig.load(app);
+            for (int i = 0; i < cfg.channels.size(); i++) names.add(cfg.channels.get(i).name);
+        }
+        return names;
+    }
+
+    /** /api/rules/validate：校验规则 JSON（不落盘），坏正则/重名/越界直接 400。 */
+    private JSONObject rulesValidate(JSONObject p) throws Exception {
+        Router.validateRulesJson(p.optJSONArray("rules"), channelNamesForRules(p));
+        JSONObject o = new JSONObject();
+        o.put("ok", true);
+        o.put("message", "规则校验通过");
+        return o;
+    }
+
+    /** /api/rules/test：匹配测试器——现拼一条事件跑规则，回显命中与投递目标。 */
+    private JSONObject rulesTest(JSONObject p) throws Exception {
+        String peer = p.optString("peer", "").trim();
+        if (peer.length() == 0) throw new IllegalArgumentException("请填发件人号码");
+        java.util.List<Router.Rule> rules = Router.parseRules(p.optJSONArray("rules"));
+        Router.Result r = Router.preview(peer, p.optString("body", ""), rules,
+                channelNamesForRules(p), p.optString("rulesDefault", "all"));
+        JSONObject o = new JSONObject();
+        o.put("ok", true);
+        o.put("drop", r.drop);
+        if (r.rule != null) o.put("rule", r.rule);
+        JSONArray ms = new JSONArray();
+        for (int i = 0; i < r.matched.size(); i++) ms.put(r.matched.get(i));
+        o.put("matched", ms);
+        JSONArray ts = new JSONArray();
+        for (int i = 0; i < r.targets.size(); i++) {
+            Router.Target t = r.targets.get(i);
+            JSONObject to = new JSONObject();
+            to.put("ch", t.ch);
+            to.put("prio", t.prio);
+            if (t.template != null && t.template.length() > 0) to.put("template", t.template);
+            ts.put(to);
+        }
+        o.put("targets", ts);
+        o.put("message", r.drop ? "丢弃：不进转发队列（仍入库，面板可人工重发）"
+                : "转发到 " + r.targets.size() + " 个目标");
+        return o;
     }
 
     private String wifiState() throws Exception {

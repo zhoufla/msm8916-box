@@ -215,7 +215,7 @@ public final class SysInfo {
             o.put("baseband", prop("gsm.version.baseband"));
             o.put("serial", prop("ro.serialno"));
             o.put("board", prop("ro.board.platform"));
-            o.put("adbd", prop("persist.sys.usb.config"));
+            o.put("usb", usbMode());
 
             long upMs = SystemClock.elapsedRealtime();
             o.put("uptimeMs", upMs);
@@ -236,10 +236,30 @@ public final class SysInfo {
             o.put("temps", temps());
             o.put("mem", meminfo());
             o.put("nets", nets());
+            o.put("keepalive", MobileKeepalive.status(ctx));
         } catch (Throwable t) {
             Logs.add("sys", "snapshot 失败: " + t);
         }
         return o;
+    }
+
+    /**
+     * 当前 USB 模式。
+     *
+     * 不能读 persist.sys.usb.config：那是「出厂默认组合名」（本机为
+     * charging,none,adb，dumpsys usb 里显示成 Default Functions），
+     * 既不是内核挂上的 function 列表，也不代表现在插着 USB adb。
+     * sys.usb.state / Current Functions 同样不可靠——原厂 init.qcom.usb.rc:618
+     * 的 rndis,adb 规则漏写 adb 却把 state 伪报成 rndis,adb。
+     * 只有 /sys/class/android_usb/android0/functions（Kernel function list）
+     * 反映内核实际挂载的组合，如 rndis 或 rndis,adb。
+     */
+    private static String usbMode() {
+        String fn = readFirstLine("/sys/class/android_usb/android0/functions");
+        if (fn != null && fn.length() > 0) return fn;
+        String cfg = prop("sys.usb.config");
+        if (cfg.length() > 0) return cfg;
+        return prop("persist.sys.usb.config");
     }
 
     /** 读小文本文件第一行；不存在/读不了返回 null。 */

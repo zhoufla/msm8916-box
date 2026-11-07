@@ -33,7 +33,8 @@ import java.security.cert.X509Certificate;
  * TLSv1.2 / AES-GCM 会被盖回去——实测连 api.github.com 一直回
  * 「SSL23_GET_SERVER_HELLO sslv3 alert handshake failure」。自己拿 SSLSocket 才完全可控。
  *
- * 只做 GET（版本元数据和 APK 都是 GET），跟随跳转、支持 chunked 落盘。
+ * 主体是 GET（版本元数据和 APK 都是 GET）；requestAuto 提供带方法/头/体的通用请求
+ * （DDNS 的 Cloudflare PATCH/POST 用）。跟随跳转、支持 chunked 落盘。
  */
 public final class Net {
 
@@ -112,6 +113,37 @@ public final class Net {
         }
     }
 
+    /**
+     * 带方法/头/体的请求（Cloudflare API：PATCH/POST + Authorization）。
+     * TLS 握不上手时与 getAuto 同样退系统 curl（-X METHOD -H -d）。
+     */
+    public static Resp requestAuto(String method, String url, String[] headers,
+                                   String body, boolean insecure, String accept) throws Exception {
+        try {
+            return requestEx(method, url, headers, body, insecure, accept);
+        } catch (Exception e) {
+            if (!curlReady() || !looksLikeTls(e)) throw e;
+            return curlTextEx(method, url, headers, body, accept);
+        }
+    }
+
+    /** 跳转沿用同一方法；Cloudflare 不重定向，这条只为对称。 */
+    private static Resp requestEx(String method, String url, String[] headers,
+                                  String body, boolean insecure, String accept) throws Exception {
+        String cur = url;
+        for (int hop = 0; hop < 5; hop++) {
+            Resp r = once(method, cur, headers, body, insecure, accept, null, null);
+            if (r.code == 301 || r.code == 302 || r.code == 303
+                    || r.code == 307 || r.code == 308) {
+                if (r.location == null || r.location.length() == 0) return r;
+                cur = absolute(cur, r.location);
+                continue;
+            }
+            return r;
+        }
+        throw new IOException("跳转超过 5 次");
+    }
+
     private static boolean looksLikeTls(Throwable t) {
         String m = String.valueOf(t.getMessage()).toLowerCase(Locale.US);
         return t instanceof javax.net.ssl.SSLException
@@ -136,6 +168,43 @@ public final class Net {
                 "-A", "sp970-smsrelay", "-H", "Accept: " + (accept == null ? "*/*" : accept),
                 "-w", "\n%{http_code}", url};
         Out res = exec(cmd);
+        String txt = res.out;
+        int nl = txt.lastIndexOf('\n');
+        if (nl >= 0) {
+            try {
+                r.code = Integer.parseInt(txt.substring(nl + 1).trim());
+            } catch (Throwable ignored) {
+            }
+            txt = txt.substring(0, nl);
+        }
+        r.body = txt;
+        r.size = txt.length();
+        if (res.code != 0 && r.code == 0) throw new IOException("curl 退出码 " + res.code + " " + res.err);
+        return r;
+    }
+
+    /** requestAuto 的 curl 退路：带方法/头/体。 */
+    private static Resp curlTextEx(String method, String url, String[] headers,
+                                   String body, String accept) throws Exception {
+        Resp r = new Resp();
+        r.transport = "curl";
+        java.util.List<String> cmd = new ArrayList<String>();
+        cmd.add(CURL); cmd.add("-sS"); cmd.add("-L"); cmd.add("-k");
+        cmd.add("-m"); cmd.add("60");
+        cmd.add("-X"); cmd.add(method == null ? "GET" : method);
+        cmd.add("-A"); cmd.add("sp970-smsrelay");
+        cmd.add("-H"); cmd.add("Accept: " + (accept == null ? "*/*" : accept));
+        if (headers != null) {
+            for (int i = 0; i < headers.length; i++) {
+                if (headers[i] != null && headers[i].length() > 0) {
+                    cmd.add("-H"); cmd.add(headers[i]);
+                }
+            }
+        }
+        if (body != null) { cmd.add("-d"); cmd.add(body); }
+        cmd.add("-w"); cmd.add("\n%{http_code}");
+        cmd.add(url);
+        Out res = exec(cmd.toArray(new String[cmd.size()]));
         String txt = res.out;
         int nl = txt.lastIndexOf('\n');
         if (nl >= 0) {
@@ -221,7 +290,7 @@ public final class Net {
                                 Progress prog) throws Exception {
         String cur = url;
         for (int hop = 0; hop < 5; hop++) {
-            Resp r = once(cur, insecure, accept, out, prog);
+            Resp r = once("GET", cur, null, null, insecure, accept, out, prog);
             if (r.code == 301 || r.code == 302 || r.code == 303
                     || r.code == 307 || r.code == 308) {
                 if (r.location == null || r.location.length() == 0) return r;
@@ -233,8 +302,10 @@ public final class Net {
         throw new IOException("跳转超过 5 次");
     }
 
-    private static Resp once(String url, boolean insecure, String accept, File out,
+    private static Resp once(String method0, String url, String[] headers, String body,
+                             boolean insecure, String accept, File out,
                              Progress prog) throws Exception {
+        String method = method0 == null ? "GET" : method0;
         URL u = new URL(url);
         String scheme = u.getProtocol().toLowerCase(Locale.US);
         boolean tls = "https".equals(scheme);
@@ -261,13 +332,26 @@ public final class Net {
 
             OutputStream os = sock.getOutputStream();
             StringBuilder req = new StringBuilder();
-            req.append("GET ").append(path).append(" HTTP/1.1\r\n");
+            req.append(method).append(' ').append(path).append(" HTTP/1.1\r\n");
             req.append("Host: ").append(host).append("\r\n");
             req.append("User-Agent: sp970-smsrelay\r\n");
             req.append("Accept: ").append(accept == null ? "*/*" : accept).append("\r\n");
             req.append("Accept-Encoding: identity\r\n");
+            if (headers != null) {
+                for (int i = 0; i < headers.length; i++) {
+                    if (headers[i] != null && headers[i].length() > 0) {
+                        req.append(headers[i]).append("\r\n");
+                    }
+                }
+            }
+            byte[] bb = null;
+            if (body != null) {
+                bb = body.getBytes("UTF-8");
+                req.append("Content-Length: ").append(bb.length).append("\r\n");
+            }
             req.append("Connection: close\r\n\r\n");
             os.write(req.toString().getBytes("UTF-8"));
+            if (bb != null) os.write(bb);
             os.flush();
 
             InputStream in = new BufferedInputStream(sock.getInputStream(), 16384);
