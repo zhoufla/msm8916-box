@@ -87,6 +87,8 @@ label.fld span{display:block;font-size:11.5px;color:var(--dim);margin-bottom:4px
   margin-bottom:5px;flex-wrap:wrap}
 .msg .peer{color:var(--accent2);font-weight:600;font-size:13px}
 .msg .body{white-space:pre-wrap;word-break:break-word;font-size:13.5px;margin:3px 0 7px}
+.msg .body.clip{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.msg .body.clip.open{white-space:pre-wrap}
 .msg .acts{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .empty{color:var(--dim);font-size:13px;text-align:center;padding:22px 0}
 .bar{height:6px;border-radius:4px;background:#0f1826;overflow:hidden;margin-top:5px}
@@ -241,18 +243,9 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
       </div>
     </div>
 
-    <!-- 子页签 3：转发配置（转发记录 + 通道管理） -->
+    <!-- 子页签 3：转发配置（通道管理在上，转发记录精简在下） -->
     <div id="msgPaneRelay" style="display:none">
-      <div class="toolbar">
-        <button class="btn sm" onclick="loadRelay()">刷新</button>
-        <button class="btn sm" onclick="injectTest()">注入测试消息</button>
-        <button class="btn sm ghost" onclick="clearGivenUp()">清理已放弃</button>
-        <span class="hint" style="flex:1 1 200px;text-align:right">收到的短信与各通道投递状态</span>
-      </div>
-      <div id="msgList"><div class="empty">加载中…</div></div>
-      <div class="pager" id="msgPager"></div>
-
-      <div class="card" style="margin-top:12px">
+      <div class="card">
         <h3>转发通道（收到的短信往哪里投递）</h3>
         <div id="chList"><div class="empty">加载中…</div></div>
         <div class="row" style="margin-top:6px">
@@ -268,6 +261,15 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
         <h3>配置文件</h3>
         <div id="cfgFile" class="hint">加载中…</div>
       </div>
+
+      <div class="toolbar" style="margin-top:12px">
+        <button class="btn sm" onclick="loadRelay()">刷新</button>
+        <button class="btn sm" onclick="injectTest()">注入测试消息</button>
+        <button class="btn sm ghost" onclick="clearGivenUp()">清理已放弃</button>
+        <span class="hint" style="flex:1 1 200px;text-align:right">转发记录 · 内容只显一行，点击展开全文</span>
+      </div>
+      <div id="msgList"><div class="empty">加载中…</div></div>
+      <div class="pager" id="msgPager"></div>
     </div>
   </section>
 
@@ -1012,7 +1014,7 @@ function loadRelay(){
       h+='<div class="msg"><div class="top"><span><span class="peer">'+esc(m.peer||'(未知)')+
         '</span> <span class="mono">'+esc(m.iso)+'</span></span>'+
         (m.code?'<span class="chip acc">验证码 '+esc(m.code)+'</span>':'')+'</div>'+
-        '<div class="body">'+esc(m.body)+'</div>'+
+        '<div class="body clip" title="'+esc(m.body)+'" onclick="this.classList.toggle(\'open\')">'+esc(m.body)+'</div>'+
         '<div class="acts">'+chs+
         (m.code?'<button class="btn sm ghost" onclick="copyText(\''+esc(m.code)+'\')">复制验证码</button>':'')+
         '<button class="btn sm ghost" onclick="retryMsg('+m.id+')">重发</button>'+
