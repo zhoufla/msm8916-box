@@ -49,6 +49,28 @@ public final class SysInfo {
     private static Method propGet;
     private static PhoneStateListener listener;
 
+    /**
+     * Data (PS) domain registration state.
+     * Android 4.4 public SDK only exposes getState() (voice domain);
+     * getDataRegState() is @hide, so try reflection first and fall back to
+     * TelephonyManager.getDataState().
+     */
+    private static int dataRegState(ServiceState s, TelephonyManager tm) {
+        try {
+            Method m = ServiceState.class.getMethod("getDataRegState");
+            Object v = m.invoke(s);
+            if (v instanceof Integer) return (Integer) v;
+        } catch (Throwable ignored) {
+        }
+        try {
+            if (tm != null && tm.getDataState() == TelephonyManager.DATA_CONNECTED) {
+                return ServiceState.STATE_IN_SERVICE;
+            }
+        } catch (Throwable ignored) {
+        }
+        return ServiceState.STATE_OUT_OF_SERVICE;
+    }
+
     /** RelayService 在主线程调用（PhoneStateListener 需要当前线程有 Looper）。 */
     public static synchronized void listen(Context ctx) {
         if (listener != null) return;
@@ -70,10 +92,16 @@ public final class SysInfo {
                 public void onServiceStateChanged(ServiceState s) {
                     try {
                         operator = s.getOperatorAlphaLong();
-                        int st = s.getState();
-                        serviceState = st == ServiceState.STATE_IN_SERVICE ? "已注册"
-                                : st == ServiceState.STATE_EMERGENCY_ONLY ? "仅紧急呼叫"
-                                : st == ServiceState.STATE_POWER_OFF ? "飞行模式" : "无服务";
+                        // getState() reports the voice/CS domain only. LTE-only data
+                        // terminals have no CS domain, so voice stays OUT_OF_SERVICE
+                        // while PS/data is registered and fully routed. Do not call
+                        // that "no service".
+                        int voice = s.getState();
+                        int data = dataRegState(s, tm);
+                        serviceState = voice == ServiceState.STATE_IN_SERVICE ? "已注册"
+                                : data == ServiceState.STATE_IN_SERVICE ? "已注册(仅数据)"
+                                : voice == ServiceState.STATE_EMERGENCY_ONLY ? "仅紧急呼叫"
+                                : voice == ServiceState.STATE_POWER_OFF ? "飞行模式" : "无服务";
                     } catch (Throwable ignored) {
                     }
                 }
