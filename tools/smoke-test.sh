@@ -4,7 +4,7 @@
 #   默认 192.168.42.129:8080 / admin:admin；给了号码才会真的发一条短信
 set -u
 
-BASE=${1:-192.168.42.129:8080}
+BASE=${RELAY_BASE:-${1:-192.168.42.129:8080}}
 AUTH=${2:-admin:admin}
 URL="http://$BASE"
 PASS=0

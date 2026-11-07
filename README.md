@@ -658,3 +658,23 @@ msm8916-box/
     ├── hwfix/                 # 固件缺陷修复（四核热补丁 / USB adb），见 tools/hwfix/README.md
     └── patch-system-img.sh    # 离线定制 system.img（debugfs）
 ```
+
+---
+
+## JZ02 分支适配（本 fork）
+
+本仓库是 `msm8916-box` 的**本地 JZ02 fork**（分支 `jz02`），上游未改动。
+JZ02 = UFI / richal / juzhen，msm8916，Android 4.4.4 `KTU84P test-keys`，
+与 SP970 不是同一套 ROM，精简清单和部署方式都不通用。
+
+- 完整适配说明：`tools/jz02/README.md`
+- 部署脚本（带离线 dry-run）：`python tools/jz02/deploy-jz02.py --dry-run`
+- 刷包 / root / 回滚：`tools/jz02/flash-and-root.md`
+- 设备参数：`tools/jz02/jz02.env`
+- 刷机包：`F:\wifi\jz02\BAK-modified\ja02-fullbak-hardened-rooted.bin`
+
+关键差异：JZ02 无 busybox（本 fork 自带 armv7 版）、开机脚本无 SP970 锚点
+（`deploy-helper.py` 已加回退）、原厂网络 adb 默认关闭、v3 全量包把
+`ro.secure` 设为 0 让 adb shell 直接是 root。**禁止**把
+`tools/relay-helper/init.qcom.post_boot.sh`（SP970 完整脚本）或
+`tools/hwfix/quadcore` 用到 JZ02 上。

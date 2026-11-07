@@ -127,11 +127,20 @@ def patch_post_boot(dev):
         cleaned.append(line)
     base = "".join(cleaned)
 
-    anchor = "setprop service.adb.tcp.port 5555"
-    idx = base.find(anchor)
-    if idx < 0:
-        raise SystemExit("找不到插入锚点：%s（开机脚本结构变了，请人工确认）" % anchor)
-    line_start = base.rfind("\n", 0, idx) + 1
+    # JZ02 adaptation DONE
+    # SP970: insert before the network-adb line (two long loops follow, so code
+    # after them would never run). JZ02 (UFI / richal) has NO such anchor and
+    # its 728-line post_boot is purely sequential -> insert after the shebang.
+    idx = base.find("setprop service.adb.tcp.port 5555")
+    if idx >= 0:
+        line_start = base.rfind("\n", 0, idx) + 1
+        print("[post_boot] SP970 anchor found")
+    else:
+        nl = base.find("\n")
+        line_start = nl + 1 if nl >= 0 else 0
+        if not base.startswith("#!"):
+            raise SystemExit("开机脚本首行不是 shebang，拒绝注入（请人工确认）")
+        print("[post_boot] SP970 anchor missing -> JZ02 mode: insert after shebang")
     final = base[:line_start] + snippet + base[line_start:]
 
     # 版本化：把设备侧「配置真源」存回仓库

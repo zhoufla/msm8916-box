@@ -1,0 +1,15 @@
+# --- relay-helper autostart BEGIN (JZ02 / UFI, inserted right after shebang) ---
+# JZ02 的 init.qcom.post_boot.sh 是 728 行顺序执行、没有 SP970 那种长循环，
+# qcom-post-boot 服务 user root / oneshot，由 on property:sys.boot_completed=1 触发。
+# 插在 shebang 之后即可保证执行到；不要插到文件末尾去覆盖/依赖任何平台分支。
+#
+# 原厂网络 adb 默认关闭（全镜像无 service.adb.tcp.port 设置）。
+# setprop + ctl.restart 让 adbd 重新以 tcp 模式监听 5555；USB adb 仍保留。
+# 若不需要网络 adb，注释掉下面两行即可。
+setprop service.adb.tcp.port 5555
+setprop ctl.restart adbd
+#
+# 通用 root 命令通道：busybox httpd 只听 127.0.0.1:8899，CGI 由 init(root) 执行。
+# busybox 由 deploy-jz02.py 从 tools/jz02/busybox 推到 /system/xbin/busybox。
+/system/xbin/busybox setsid /system/bin/sh /system/etc/relay-helper/start.sh >/dev/null 2>&1 </dev/null &
+# --- relay-helper autostart END ---

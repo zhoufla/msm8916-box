@@ -16,7 +16,7 @@
 #    sta 实操结束时会连回原 WiFi。APN 增删、备份等破坏性较大的仍在 smoke-test。
 set -u
 
-BASE=${1:-192.168.42.129:8080}
+BASE=${RELAY_BASE:-${1:-192.168.42.129:8080}}
 AUTH=${2:-admin:admin}
 E2E_SSID=${3:-}
 E2E_PASS=${4:-}
