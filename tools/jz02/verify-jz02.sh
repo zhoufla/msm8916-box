@@ -1,4 +1,5 @@
 #!/system/bin/sh
+# <!-- v6-vendor-strip-2026-11-07 -->
 # JZ02 部署后自检（设备侧执行，需 root；用 /system/xbin/busybox 提供的 applet）
 # 用法: adb -L tcp:5039 -s 0 shell sh /data/local/tmp/verify-jz02.sh
 BB=/system/xbin/busybox
@@ -28,11 +29,23 @@ for f in /system/etc/security/otacerts.zip /system/vendor/speccfg/ota.zip \
     if [ -e "$f" ]; then echo "  EXISTS(BAD) $f"; else echo "  gone      $f"; fi
 done
 echo "-- 保留红线（应 EXISTS） --"
-for f in /system/priv-app/ufilauncherzx.apk /system/etc/apns-conf.xml \
+for f in /system/etc/apns-conf.xml \
          /system/app/TelephonyProvider.apk /system/priv-app/TeleService.apk \
-         /system/vendor/speccfg/switch_spec.sh /system/etc/adbkey.pub; do
+         /system/vendor/speccfg/switch_spec.sh /system/etc/adbkey.pub \
+         /system/vendor/Default/data/misc/radio/qcril.db; do
     if [ -e "$f" ]; then echo "  exists    $f"; else echo "  MISSING(BAD) $f"; fi
 done
+echo "-- v6 厂商应用清零（应全部 GONE） --"
+for f in /system/priv-app/ufilauncherzx.apk /data/data/com.youdo.server \
+         /system/vendor/CTA /system/vendor/ChinaMobile /system/vendor/overlay \
+         /data/SelfHost /data/switch_spec; do
+    if [ -e "$f" ]; then echo "  EXISTS(BAD) $f"; else echo "  gone      $f"; fi
+done
+echo "vendor_pkg=$(pm list packages | $BB grep -i youdo)"
+echo "home_pkg=$(pm list packages -f | $BB grep -i launcher3)"
+echo "boot_completed=$(getprop sys.boot_completed) bootanim=$(getprop init.svc.bootanim)"
+echo "switch_spec_effective=$($BB grep -v '^#' /system/vendor/speccfg/switch_spec.sh | $BB grep -v '^$')"
+echo "80_port=$(netstat -ltn 2>/dev/null | $BB grep -c ':80 ')"
 echo "-- SIM / radio（上一轮遗留：SIM READY 但 OUT_OF_SERVICE） --"
 echo "sim=$(getprop gsm.sim.state) operator=$(getprop gsm.sim.operator.alpha) numeric=$(getprop gsm.operator.numeric)"
 dumpsys telephony.registry 2>/dev/null | $BB grep -iE 'mServiceState|mDataConnectionState' | $BB head -4

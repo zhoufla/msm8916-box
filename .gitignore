@@ -4,3 +4,6 @@ dist/
 *.db
 *.log
 local.properties
+
+# JZ02: keep the SP970 HOME launcher assets in the fork
+!tools/jz02/launcher/*.apk

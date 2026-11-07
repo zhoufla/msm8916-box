@@ -236,3 +236,113 @@ python tools/jz02/deploy-jz02.py --verify-only --reboot               -> 重启�
 - 无 Mms 时 `content://sms` 读写是否完全可用（需插卡注网后测）。
 - 主机接入 JZ02 热点后网络 adb 的可达性；不需要网络 adb 时把
   `post_boot.snippet` 里两行 `setprop` 注释掉即可。
+
+---
+
+## 十、v6：厂商应用清零 + SP970 桌面（2026-11-07）
+
+<!-- v6-vendor-strip-2026-11-07 -->
+
+### 1. 为什么「桌面实在必须」
+
+强化档之后系统里只剩 32 个 APK，其中**唯一真正的厂商定制应用**是
+`com.youdo.server` = `/system/priv-app/ufilauncherzx.apk`（8,518,315 B，
+`com.stub.StubApp` 加固壳）：persistent 进程、声明 `HOME`、跑
+`com.youdo.ufi.ui.UfiServer` 占 80 端口、带 `BOOT_COMPLETED` 优先级 1000 的 receiver。
+
+删掉它之后实测：
+
+```
+init.svc.bootanim = running        (永不退出)
+sys.boot_completed = (空)          (BOOT_COMPLETED 不广播)
+AMS mFocusedStack = null           (没有任何 HOME activity)
+```
+
+**JZ02 虽然无触摸屏（`-touch -keyb -nav`），仍必须有一个 HOME**，
+否则 bootanimation 不结束、`sys.boot_completed` 不置 1，
+`init.qcom.post_boot.sh` 的注入片段和 relay-helper 自启都不会触发。
+装回 HOME 后 20 秒即 `boot_completed=1` / `bootanim=stopped`。
+
+### 2. 精简内容
+
+| 类别 | 处理 |
+|---|---|
+| 厂商应用 | 删 `/system/priv-app/ufilauncherzx.apk`；PMS 重启后移除 `com.youdo.server` |
+| 厂商数据 | 删 `/data/data/com.youdo.server`、`/data/SelfHost`、`/data/switch_spec` |
+| 运营商规格空壳 | 删 `/system/vendor/{CTA,ChinaMobile,ChinaTelecom,ChinaUnicom,overlay}`（均 0 文件） |
+| 切规格脚本 | `speccfg/switch_spec.sh` 短路为 `exit 0`（原脚本含 `wipe data`，且模板已删空）；原件留 `.pre-slim` |
+| dalvik | 清 `*ufilauncherzx*` / `*youdo*` 缓存 |
+
+`/data/fota` 是开机时由系统以 `system:system` 重建的 FOTA 占位空目录，
+**不是厂商应用残留**，保留且不列入清理断言。
+
+### 3. 严格保留（删了会砖或影响插卡上网）
+
+`/system/vendor/Default`（含 `data/misc/radio/qcril.db`）、
+`speccfg/vendor.prop` / `speccfg/spec` / `copy_apps.sh`、
+全部高通 `/system/vendor/lib`（459 个文件，相机/GPU/音频）、
+`android.policy.odex` / `services.odex`（framework 核心，内含厂商定制但不可删）、
+`TeleService` / `TelephonyProvider` / `ims` / `Settings` / `apns-conf.xml`、
+relay-helper 适配层、adb 公钥、芷荷 aboot / abootbak。
+
+### 4. 桌面来源（用户指定从 SP970 提取）
+
+| 文件 | 大小 | md5 | JZ02 目标 |
+|---|---|---|---|
+| SP970 `/system/priv-app/Launcher3.apk` | 3,198,370 B | `fd5a5d448f8e7f56c2eb4db3bf6041ef` | `/system/priv-app/Launcher3.apk` |
+| SP970 `/system/app/Launcher2LayoutRes.apk` | 7,229 B | `cbf1c646bdd69717a76aa7d1ab9a3bd2` | `/system/app/Launcher2LayoutRes.apk` |
+
+同为 Android 4.4.4 / msm8916、纯 APK 无 odex、AOSP 标准
+`com.android.launcher3`，可直接移植；本目录 `launcher/` 留有副本。
+厂商面板 APK 备份 `work/live/ufilauncherzx.backup.apk`
+（md5 `1e4c5b165e87b704aae84f6cef27911f`）用于 `--restore`。
+
+### 5. 脚本
+
+`F:\wifi\jz02\BAK-analysis\work\live\strip-vendor.py`（本目录 `strip-vendor.py` 为副本）：
+
+```
+python strip-vendor.py --with-launcher --reboot   # 本次实际执行
+python strip-vendor.py --restore --reboot         # 完整回滚
+```
+
+注意：`adb remount`（宿主机客户端请求）才能把 `/system` 挂 rw，
+设备内 `mount -o remount,rw /system` 在此 ROM 上不生效。
+
+### 6. 验证结果
+
+`work/live/verify-hardened.py` **20/20 PASS**：
+root / 公钥 / 强化档 24 项 GONE / 通信红线 7 项 / 厂商残留全 GONE /
+`com.youdo.server` 已从 PMS 移除 / HOME=`com.android.launcher3` /
+开机流程完成 / `switch_spec.sh` 短路 / 4 份配置净化 / aboot 芷荷版。
+
+开机后：80 端口空出、8080 空闲、`127.0.0.1:8899` helper、
+`0.0.0.0:5555` 网络 adb；`deploy-jz02.py --verify-only` 全绿。
+
+### 7. 可选的下一阶段（尚未执行，需确认）
+
+无屏设备用不到的 AOSP/UI 应用可继续清，但**通信链必须保留**：
+`Contacts / ContactsProvider / Dialer / Keyguard / SystemUI / Provision /
+PackageInstaller / Bluetooth / BluetoothExt / CertInstaller / KeyChain /
+InputDevices / ExternalStorageProvider / MediaProvider / OneTimeInitializer /
+ProxyHandler`。
+其中 `Keyguard` / `SystemUI` 删除需重测开机流程（它们与 HOME/bootanim 相关），
+`PackageInstaller` 删除后只能靠 `adb install` / `pm install`。
+
+### 8. v6 可复刷交付（校验值）
+
+<!-- v6-checksums-2026-11-07 -->
+
+| 文件 | md5 | 用途 |
+|---|---|---|
+| `BAK-modified/ja02-fullbak-hardened-rooted-aboot-v6.bin` | `c57b5ed8611528bcdf69a4b27d65370e` | MiKo 9008 全量刷（3.7G） |
+| `BAK-analysis/work/system_v6.img` | `bf74c42981e0b2d1073a2a93db3ec706` | raw ext4 800MB，`e2fsck -fn` 全清 |
+| `BAK-analysis/work/system_v6.sparse.img` | `20e826bcb9af4b5496baae6553546bff` | `fastboot flash system`（4 chunks，各 ≤200MiB） |
+
+v6 整包 sha256 `56fbb6a61f5bc9b651c24b996e3ec7f72be60fe90c230a0fa59e4b5b771baf3e`；
+GPT 头/分区项 CRC 有效、22 个分区逐字节未变、原始包 md5 `2fa5ee48…` 全程未动。
+`system_v6.img` 是真机 dd 快照经 `e2fsck -fy` 清理 orphan inode 后的干净镜像。
+
+刷 v6 整包后需重新装一次 APK（APK 在 `/data/app`，不在 system 分区）：
+`adb -L tcp:5039 -s 0 install -r dist/com.sp970.smsrelay-1.7.0.apk`。
+helper 自启已固化在 system 的 post_boot 注入里，开机自动生效。

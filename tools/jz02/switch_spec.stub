@@ -1,0 +1,3 @@
+#!/system/bin/sh
+# disabled: switch_spec.sh used to wipe data when switching carrier spec.
+exit 0
