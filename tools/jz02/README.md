@@ -494,3 +494,68 @@ gadget 会重新枚举，`rndis0` 可能短暂没有 `192.168.42.129/24`，
 
 **分工**：`BAK-analysis/work/live/verify-hardened.py` 管刷包落地（新增面板
 状态 INFO 项）；`tools/jz02/deploy-jz02.py --verify-only` 管面板完整可用性。
+
+
+## 外置 SIM 卡（3 路硬件 mux）
+
+### 为什么需要
+
+JZ02 有一个 3 选 1 的 SIM 硬件开关，内核 `leds-gpio` 导出
+`sim1/sim2/sim3_switch_gpio` + `sim_hotdet_gpio`（`/sys/class/leds/*/brightness`）。
+内核默认把 `sim1` 拉高 → 内置 eSIM1（`898611...` / 中国电信 46011），**插了实体卡
+也读不到**。厂商在 `framework/services.jar` 的 `LightsService.switchSimSlot(1/2/3)`
+里定义 1=eSim1、2=eSim2、3=外置实体卡，但只有厂商 Web 面板会发
+`android.led.sim.switch` 广播触发它；精简删掉面板后，`sp_sim_slot` 三个命名空间
+全为 `null`，开机也没有主动切卡流程。
+
+### 不要用广播热切
+
+```sh
+am broadcast -a android.led.sim.switch --ei slot 3   # 实测会挂死整机
+```
+
+`switchSimSlot()` 在 system_server 线程里同步 sleep 约 4.5 秒做电平时序，之后
+handler 链还会 `toggleRadioOnOff` ×2、延时 8s、恢复 APN。RIL 重连期间整机挂起，
+只能断电重插恢复。
+
+### 部署方式（冷启动固化，绕过 framework）
+
+`deploy-jz02.py` 把 `tools/jz02/install-recovery.sh` 推到
+`/system/etc/install-recovery.sh`（0755 root）。`init.rc` 里已有
+`service flash_recovery /system/etc/install-recovery.sh`（`class main`、`oneshot`、
+root、无 `disabled`），在 `on boot` 的 `class_start main` 阶段执行，远早于
+rild / modem / framework；精简后该文件本来不存在，服务是空跑。脚本只写 4 个
+sysfs 值，让 modem 上电就接在选定的通道上，无 sleep、无 radio 操作。
+
+**默认不写任何 GPIO**——部署脚本本身不改变正在工作的设备的 SIM 通道。需要外置卡时
+显式启用：
+
+```sh
+setprop persist.jz02.sim.slot 3
+reboot
+```
+
+| `persist.jz02.sim.slot` | 通道 |
+|---|---|
+| 未设置 / `0` | 不写（内核默认 eSIM1，安全默认） |
+| `1` | 内置 eSIM1 |
+| `2` | 内置 eSIM2 |
+| `3` | 外置实体 SIM 卡座 |
+
+属性存于 `/data/property`，重启保留。回滚：`setprop persist.jz02.sim.slot 0;
+reboot`，或直接删除 `/system/etc/install-recovery.sh`。
+
+### 真机实测（2026-11-07）
+
+冷启动后 `init.svc.flash_recovery=stopped`（钩子确实执行）、
+`sim1=0 sim2=0 sim3=1 hotdet=0`；`gsm.sim.operator.alpha` 从 `中国电信 46011`
+变为 **`CMCC 46000`**、`gsm.network.type=LTE`；APN `China Mobile / 46000 / cmnet`
+本来就存在，`rmnet0` 成功拿到 `10.108.179.11/29` + 移动 DNS；面板 8080
+`HTTP 200`、helper 保持 root。
+
+> ⚠ **已知风险**：首次切到外置卡时，开机约 3 分钟后整机挂起（Windows 侧 USB
+> Composite / ADB Interface / RNDIS 仍 OK，Android 侧 adb / ping / 8080 全无响应，
+> 需断电重插）。禁用移动数据（`svc data disable` + `settings put global
+> mobile_data 0`）后连续稳定 10 分钟以上、越过原挂起时间点。不需要蜂窝数据时
+> 建议保持 `mobile_data=0`；需要时 `svc data enable` 并观察，异常断电重插即可，
+> 属性会让开机仍选在外置卡通道。

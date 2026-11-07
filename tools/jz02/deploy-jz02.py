@@ -293,6 +293,19 @@ def deploy(dev):
     print("  " + (out + "").strip()[:120])
     dev.sh("mount -o remount,rw /system 2>/dev/null; mount | grep ' /system '")
 
+    # SIM mux selector. init.rc's "flash_recovery" service is class main /
+    # oneshot / root, so this runs at class_start main, before rild and
+    # framework. The script is a NO-OP unless persist.jz02.sim.slot is set.
+    sim_local = os.path.join(HERE, "install-recovery.sh")
+    if os.path.exists(sim_local):
+        dev.push(sim_local, "/system/etc/install-recovery.sh")
+        dev.sh("chown root:root /system/etc/install-recovery.sh; "
+               "chmod 755 /system/etc/install-recovery.sh")
+        print("  SIM 通道脚本已部署（默认不写 GPIO；"
+              "setprop persist.jz02.sim.slot 3 才启用外置卡）")
+    else:
+        print("  [WARN] 缺少 install-recovery.sh，跳过 SIM 通道脚本")
+
     print("\n== 2/7 busybox -> /system/xbin ==")
     dev.sh("mkdir -p /system/xbin")
     dev.push(os.path.join(HERE, "busybox"), "/data/local/tmp/busybox-jz02")
@@ -391,6 +404,13 @@ def verify(dev):
 
     boot, _, _ = dev.sh("grep -c 'relay-helper autostart BEGIN' %s" % POST_BOOT)
     check("开机脚本已注入", boot.strip() == "1", "计数=" + boot.strip())
+
+    sim, _, _ = dev.sh(
+        "[ -x /system/etc/install-recovery.sh ] && echo PRESENT || echo MISSING; "
+        "echo -n slot_prop=; getprop persist.jz02.sim.slot; "
+        "for x in sim1_switch_gpio sim2_switch_gpio sim3_switch_gpio; "
+        "do echo -n $x=; cat /sys/class/leds/$x/brightness 2>/dev/null; done")
+    print("  [INFO] SIM 通道: %s" % " ".join(sim.split()))
 
     proc, _, _ = dev.sh("p=$(cat /data/local/tmp/relay-helper/start.pid 2>/dev/null); "
                         "[ -n \"$p\" ] && [ -d /proc/$p ] && echo ALIVE || echo DEAD")
