@@ -496,6 +496,12 @@ public final class WebPanel {
             if (!post) throw new IllegalArgumentException("需要 POST");
             return Http.Resp.json(Maint.cmd(app, p.optString("cmd", "")).toString());
         }
+        if ("/api/maint/adb".equals(path)) {
+            return Http.Resp.json(post
+                    ? Maint.adbAction(app, p.optString("action", ""),
+                            p.optString("confirm", "")).toString()
+                    : Maint.adbStatus(app).toString());
+        }
         if ("/api/maint/checkup".equals(path)) {
             return Http.Resp.json(Maint.checkup(app).toString());
         }

@@ -355,6 +355,46 @@ WebPanel「假在线」（内部 running=true、端口不再 accept）永远不�
 - 注意：这两层都救不了「内核完全冻结」——真硬件看门狗需要内核启用
   `CONFIG_MSM_WATCHDOG` bite 或外部断电装置，本版本只能保证「内核还能调度 shell」时自愈。
 
+### v1.8.2 ADB 调试面板（P0-3，事故收尾）
+
+事故里 8080 面板一卡就只能拔电，根因之一是**没有第二条管理通道**。同一份诊断还指出
+`192.168.10.101:1988 → 设备 5555` 长期挂着一条队列卡住的连接。先做通道修复，再把 adb
+状态与处置搬进面板。
+
+**通道修复（P-1，设备侧 root + 主机侧清理）**
+
+- WSL 里有两个常驻 adb server（`tcp:5037` / `tcp:5039`）在自动重连设备；`adb_keys` 缺失时
+  认证握手卡住，留下半开连接。全部 `kill-server` 后用单一 server 重连即恢复
+  （与路线图 B2 补充里「全机只跑一个 adb server」的结论一致）。
+- 把 Windows 与 WSL 两把 `adbkey.pub` 写入 `/data/misc/adb/adb_keys`（`0640 system:shell`），
+  重启 `adbd`。实测 `adb connect 192.168.10.196:5555` → `device`，`adb shell id` = `uid=0(root)`。
+- **纠正一处旧描述**：netstat 表头是 `Proto Recv-Q Send-Q`，事故行 `tcp 310 0 …` 里的 310
+  是 **Recv-Q**，不是 Send-Q；Send-Q 恒为 0。含义不变（对端发来的数据 adbd 没读走），
+  但判定必须看两个队列，只判 Send-Q 会漏掉这类连接。
+
+**面板接口 `GET/POST /api/maint/adb`**（需 Basic/Token，无认证 401）
+
+| GET 字段 | 含义 |
+|---|---|
+| `mode` / `tcpPort` / `adbd` / `usbState` | tcp 或 usb、监听端口、adbd 服务状态、USB gadget 状态 |
+| `keysPresent` / `keysCount` | `adb_keys` 是否存在、公钥行数 |
+| `connections[]` | 每条 5555 连接的 `local/remote/state/recvQ/sendQ/stale` |
+| `staleCount` | `ESTABLISHED` 且 Recv-Q 或 Send-Q > 0 的半开连接数 |
+
+| POST `action` | 行为 | 二次确认 |
+|---|---|---|
+| `restart` | 保持当前模式 `stop adbd; start adbd`，清掉半开连接 | 前端弹确认 |
+| `tcp` | `setprop service.adb.tcp.port 5555` + 重启 adbd | `confirm=TCP` |
+| `usb` | 清空 `service.adb.tcp.port` + 重启 adbd | `confirm=USB` |
+
+- **绝不改 `sys.usb.config`**：这台设备靠 rndis 提供 8080 面板，动它会连面板一起失联。
+  实测切到 USB 模式时 `/api/ping` 仍返回 200。
+- 采集命令**全程不用管道**（SIGPIPE 会刷 tombstone）；设备 shell 没有 `wc`，
+  统计公钥行数必须显式走 `/system/xbin/busybox wc`。
+- 本机 adbd 只服务一条传输：USB adb 与网络 adb 不能同时使用（见「固件缺陷修复」一节）。
+- v1.8.2 已于 2026-11-07 在 `192.168.10.196` 真机部署：L0 224/0、L1 `panel-e2e.sh` 72/72，
+  AD-01..AD-08 全部通过（详见 `tools/TEST-PLAN.md` 第 10 节）。
+
 ## 在线升级（GitHub Actions 云编译 + 设备主动拉取）
 
 打一个 tag 就出一条 Release，设备在面板「升级」页点一下，或到点自动查（默认 24h）。
@@ -558,6 +598,9 @@ adb shell am broadcast -a com.sp970.smsrelay.TEST --ez importinbox true
   WiFi 高级按真机能力收敛为：隐藏 SSID / 最大关联数 / 自动信道 / 踢客户端（hostapd_cli）——
   改信道、改发射功率、MAC 白名单在这台裁剪 hostapd + QCA 驱动上没有可用原语，明确不做。
   （待办：冷启动后重跑一次开机窗口验证 `verify 5 --reboot`）
+- [x] **ADB 调试通道面板**（v1.8.2，事故 P0-3）：`/api/maint/adb` 回模式 / 端口 /
+  5555 连接明细（含 Recv-Q/Send-Q 半开标记）/ `adb_keys` 状态；一键重启 adbd、
+  USB/TCP 切换（二次确认）；并补回 `adb_keys` 恢复第二管理通道。详见「维护通道」的 v1.8.2 段。
 - [ ] 定时任务：定时重启热点、定时补收（crontab 已可写，缺预设模板）——低电量告警已并入
   「告警推送」（`alerts.batteryPct`）
 

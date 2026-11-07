@@ -251,3 +251,39 @@ cat /data/local/tmp/relay-helper/wd8080.state
 - **WD-04 需要真实拔电**（快照已按 2 分钟持续更新、落在 /sdcard 非易失介质）；
   **WD-06 会短暂中断面板**，安排在夜间或确认无在途短信时做。
 - 仍然救不了「内核完全冻结」：真硬件看门狗需内核 `CONFIG_MSM_WATCHDOG` bite 或外部断电装置。
+
+## 10. v1.8.2 ADB 面板专项（2026-11-07 事故收尾 · P0-3）
+
+> 基线：v1.8.2（versionCode 10802）· L0 224/0 · L1 72/72 · 设备 192.168.10.196
+
+| 用例 | 内容 | 结果 |
+|---|---|---|
+| AD-01 | `GET /api/maint/adb` 无认证 401、带认证 200 且字段齐全 | ☑ |
+| AD-02 | `tcp` / `usb` 不带 `confirm` 被拒（`需要二次确认`） | ☑ |
+| AD-03 | 非法 `action` 被白名单拒绝 | ☑ |
+| AD-04 | `keysCount` 正确（2 把公钥）；连接明细含 `recvQ/sendQ/stale` | ☑ |
+| AD-05 | `restart` 清掉半开连接，队列归零、adbd 仍 running | ☑ |
+| AD-06 | TCP→USB→TCP 可逆；切 USB 时 `/api/ping` 仍 200（面板不断） | ☑ |
+| AD-07 | stale 判据回放：事故行 `R310 ESTABLISHED` → true；正常行 / `CLOSE_WAIT` → false | ☑ |
+| AD-08 | `adb connect 192.168.10.196:5555` → `device`，`adb shell id` = `uid=0(root)` | ☑ |
+| AD-09 | 真机造 ESTABLISHED 且队列非空的连接让面板标红 | ☐ 需 adbd 卡死，属破坏性，不做；改以事故原始行回放判定逻辑 |
+
+### 真机验证记录（2026-11-07 21:00–21:12 · v1.8.2 / 10802）
+
+- **P-1 通道修复**：WSL 两个常驻 adb server（`tcp:5037` / `tcp:5039`）`kill-server` 清掉；
+  Windows + WSL 两把公钥写入 `/data/misc/adb/adb_keys`（`0640 system:shell`）；重启 adbd 后
+  `.101:1988` 的半开 ESTABLISHED 消失，`adb devices` = `device`、`adb shell id` = root。
+- **部署**：面板 root 通道 + 内网临时 HTTP；`sha256sum -c` 通过；签名证书
+  `A7:1E:40…80:D9` 与现网一致，`pm install -r -d` 保留数据。安装前
+  `touch smsrelay-no-reboot`，后台安装脚本完成后自动删除（防 watchdog 在安装窗口误 reboot）。
+- **部署中揪出两处缺陷并重新构建覆盖**：① 设备 shell 没有 `wc`，统计公钥行数必须走
+  `/system/xbin/busybox wc`（否则 `keysCount=0`）；② stale 只判 `Send-Q>0`，而事故里
+  `tcp 310 0 …` 的 310 是 **Recv-Q**（netstat 表头 `Proto Recv-Q Send-Q`），Send-Q 恒为 0，
+  原判据会漏掉全部半开连接。修成 `(recvQ>0 || sendQ>0)` 后 `keysCount=2`、明细显示 `R311 S0`。
+- **动作实测**：`restart` 后 `CLOSE_WAIT R311 S0` 消失、新连接 `ESTABLISHED R0 S0`；
+  TCP→USB 时 `mode=usb tcpPort=''` 且 `/api/ping=200`（证明未动 `sys.usb.config`），
+  切回 TCP 后 `mode=tcp port=5555`。四条动作日志均落盘 `smsrelay-run.log` 且带 `up=`；
+  `wd8080.state=0`、guard 已删、四类日志持续更新。
+- **USB/TCP 切换测试布了 35 秒自动回滚兜底脚本**（幂等恢复 `tcp/5555`），验证完最终状态正常。
+- 残留：`crond.log` 的 `time disparity of 2050 minutes`（墙钟跳变）仍存在；
+  WD-04 真实拔电、WD-09 ≥30min 长时、WD-10 24h 挂机仍未做；真硬件看门狗仍缺。

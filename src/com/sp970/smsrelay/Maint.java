@@ -59,6 +59,144 @@ public final class Maint {
         return o;
     }
 
+    // ---------- #6b ADB 调试通道（P0-3） ----------
+
+    /**
+     * adb 状态采集。刻意不用管道：设备侧管道在 SIGPIPE 时会刷 tombstone。
+     * netstat 里 ESTABLISHED 且 Recv-Q/Send-Q 非空的连接就是「认证卡住 / 半开」的僵尸连接，
+     * 2026-11-07 事故里 .101:1988 正是这样一条（Recv-Q=310）。
+     * 设备 shell 没有 wc，必须显式走 busybox。
+     */
+    private static final String ADB_INFO =
+            "echo '##ADBD'; getprop init.svc.adbd; " +
+            "echo '##TCPPORT'; getprop service.adb.tcp.port; " +
+            "echo '##USB'; getprop sys.usb.state; " +
+            "echo '##SECURE'; getprop ro.adb.secure; " +
+            "echo '##KEYS'; ls -l /data/misc/adb/adb_keys 2>&1; " +
+            BB + " wc -l < /data/misc/adb/adb_keys 2>&1; " +
+            "echo '##NETSTAT'; " + BB + " netstat -nt; " +
+            "echo '##END'";
+
+    public static JSONObject adbStatus(Context ctx) {
+        JSONObject o = new JSONObject();
+        try {
+            Root.Result r = Root.exec(ctx, ADB_INFO);
+            if (!r.ok()) throw new IllegalStateException("helper 执行失败：" + brief(r));
+            Map<String, List<String>> sec = sections(r.out);
+            String adbd = first(sec.get("ADBD"));
+            String port = first(sec.get("TCPPORT"));
+            String usb = first(sec.get("USB"));
+            String secure = first(sec.get("SECURE"));
+
+            boolean keysPresent = false;
+            int keysCount = 0;
+            List<String> keys = sec.get("KEYS");
+            if (keys != null) {
+                for (String line : keys) {
+                    String t = line.trim();
+                    if (t.contains("adb_keys") && !t.contains("No such file")
+                            && !t.contains("not found")) keysPresent = true;
+                    try {
+                        keysCount = Integer.parseInt(t);
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
+
+            boolean tcp = port.length() > 0 && !"0".equals(port);
+            JSONArray conns = new JSONArray();
+            int stale = 0;
+            List<String> net = sec.get("NETSTAT");
+            if (net != null) {
+                for (String line : net) {
+                    String[] f = line.trim().split("\\s+");
+                    if (f.length < 6 || !f[0].startsWith("tcp")) continue;
+                    if (!f[3].endsWith(":5555") && !f[4].endsWith(":5555")) continue;
+                    int recvQ = parseInt(f[1], 0);
+                    int sendQ = parseInt(f[2], 0);
+                    boolean bad = "ESTABLISHED".equalsIgnoreCase(f[5])
+                            && (recvQ > 0 || sendQ > 0);
+                    JSONObject c = new JSONObject();
+                    c.put("local", f[3]);
+                    c.put("remote", f[4]);
+                    c.put("state", f[5]);
+                    c.put("recvQ", recvQ);
+                    c.put("sendQ", sendQ);
+                    c.put("stale", bad);
+                    conns.put(c);
+                    if (bad) stale++;
+                }
+            }
+
+            o.put("ok", true);
+            o.put("mode", tcp ? "tcp" : "usb");
+            o.put("tcpPort", port);
+            o.put("adbd", adbd);
+            o.put("usbState", usb);
+            o.put("secure", "1".equals(secure));
+            o.put("keysPresent", keysPresent);
+            o.put("keysCount", keysCount);
+            o.put("staleCount", stale);
+            o.put("connections", conns);
+            o.put("message", stale > 0
+                    ? "发现 " + stale + " 条半开连接（收发队列卡住），建议一键重启 adbd"
+                    : (keysPresent ? "adb 通道正常" : "adb_keys 缺失，网络 adb 可能无法认证"));
+        } catch (Throwable t) {
+            put(o, "ok", false);
+            put(o, "message", str(t));
+        }
+        return o;
+    }
+
+    /** 动作白名单：restart / tcp / usb。切换模式要二次确认，避免误断网络 adb。 */
+    public static JSONObject adbAction(Context ctx, String action, String confirm) {
+        JSONObject o = new JSONObject();
+        try {
+            String prefix, label;
+            if ("restart".equals(action)) {
+                prefix = "";
+                label = "重启 adbd";
+            } else if ("tcp".equals(action)) {
+                if (!"TCP".equals(confirm)) throw new IllegalArgumentException("需要二次确认：confirm=TCP");
+                prefix = "setprop service.adb.tcp.port 5555; ";
+                label = "切到 TCP 5555";
+            } else if ("usb".equals(action)) {
+                if (!"USB".equals(confirm)) throw new IllegalArgumentException("需要二次确认：confirm=USB");
+                prefix = "setprop service.adb.tcp.port ''; ";
+                label = "切回 USB";
+            } else {
+                throw new IllegalArgumentException("action 只能是 restart / tcp / usb");
+            }
+            // 绝不改 sys.usb.config：这台设备靠 rndis 提供 8080 面板，改了会连面板一起失联。
+            String cmd = prefix +
+                    "stop adbd; sleep 2; start adbd; sleep 3; " +
+                    "echo ADBD=$(getprop init.svc.adbd); " +
+                    "echo PORT=$(getprop service.adb.tcp.port); " +
+                    "echo USB=$(getprop sys.usb.state); " +
+                    BB + " netstat -nt > /data/local/tmp/adb-after.txt 2>&1; " +
+                    BB + " grep 5555 /data/local/tmp/adb-after.txt; " +
+                    "echo DONE";
+            Root.Result r = Root.exec(ctx, cmd);
+            boolean ok = r.ok() && r.out.contains("DONE") && r.out.contains("ADBD=running");
+            o.put("ok", ok);
+            o.put("out", r.out);
+            o.put("message", ok ? label + "完成，adbd 已恢复" : label + "失败：" + brief(r));
+            Logs.add("maint", "[adb] " + o.optString("message"));
+        } catch (Throwable t) {
+            put(o, "ok", false);
+            put(o, "message", str(t));
+        }
+        return o;
+    }
+
+    private static int parseInt(String s, int def) {
+        try {
+            return Integer.parseInt(s.trim());
+        } catch (Throwable t) {
+            return def;
+        }
+    }
+
     // ---------- #9 一键体检 / #10 健康自检 ----------
 
     /**
