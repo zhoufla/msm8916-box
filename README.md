@@ -376,7 +376,7 @@ WebPanel「假在线」（内部 running=true、端口不再 accept）永远不�
 
 | GET 字段 | 含义 |
 |---|---|
-| `mode` / `tcpPort` / `adbd` / `usbState` | tcp 或 usb、监听端口、adbd 服务状态、USB gadget 状态 |
+| `mode` / `tcpPort` / `adbd` / `usbState` | 是否已启用网络 adb（`tcp`=已启用）、监听端口、adbd 服务状态、USB gadget 状态 |
 | `keysPresent` / `keysCount` | `adb_keys` 是否存在、公钥行数 |
 | `connections[]` | 每条 5555 连接的 `local/remote/state/recvQ/sendQ/stale` |
 | `staleCount` | `ESTABLISHED` 且 Recv-Q 或 Send-Q > 0 的半开连接数 |
@@ -385,15 +385,27 @@ WebPanel「假在线」（内部 running=true、端口不再 accept）永远不�
 |---|---|---|
 | `restart` | 保持当前模式 `stop adbd; start adbd`，清掉半开连接 | 前端弹确认 |
 | `tcp` | `setprop service.adb.tcp.port 5555` + 重启 adbd | `confirm=TCP` |
-| `usb` | 清空 `service.adb.tcp.port` + 重启 adbd | `confirm=USB` |
 
-- **绝不改 `sys.usb.config`**：这台设备靠 rndis 提供 8080 面板，动它会连面板一起失联。
-  实测切到 USB 模式时 `/api/ping` 仍返回 200。
+- 本机固定使用**网络 adb**。v1.8.3 已移除 `usb` 动作与「切回 USB」按钮：只清空
+  `service.adb.tcp.port` 并不能启用 USB adb（USB gadget 层另有原厂缺陷），反而会同时失去
+  网络 adb 与 USB adb 两条通道。真正启用 USB adb 走 `tools/hwfix/usbadb/enable.sh`
+  （含 `rndis0` 补 IP 与 300s 看门狗回滚），且启用后 5555 会 offline。
+- **绝不改 `sys.usb.config`**：切换 gadget functions 会重建 `rndis0` 并丢 IP；
+  8080 面板实际走 `wlan0`（WiFi），但这条仍是面板动作的安全边界。
 - 采集命令**全程不用管道**（SIGPIPE 会刷 tombstone）；设备 shell 没有 `wc`，
   统计公钥行数必须显式走 `/system/xbin/busybox wc`。
 - 本机 adbd 只服务一条传输：USB adb 与网络 adb 不能同时使用（见「固件缺陷修复」一节）。
 - v1.8.2 已于 2026-11-07 在 `192.168.10.196` 真机部署：L0 224/0、L1 `panel-e2e.sh` 72/72，
   AD-01..AD-08 全部通过（详见 `tools/TEST-PLAN.md` 第 10 节）。
+
+### v1.8.3 · 概览网卡 + DDNS 网卡必选（2026-11-07）
+
+- `/api/sys.nets[]` 新增 `ip6`：在线网卡同时报 IPv4 / IPv6 / MAC，纯 IPv6 接口不再被
+  `if (ip.length()==0) continue` 丢掉；IPv6 取全球单播（2000::/3）优先，剥掉 `%scope`。
+- 首页「概览」新增 **网卡（IPv4 / IPv6）** 卡片，系统页原先只有 IPv4 的网卡表格移到此处。
+- DDNS 解析记录的网卡由「留空=自动」文本输入改为**必选下拉**，选项来自 `/api/sys` 的在线
+  网卡，保存时校验非空。旧配置里 `iface` 为空的记录会按当前生效的 v6 反推网卡
+  （与原自动逻辑一致：蜂窝优先），避免一保存就把正在工作的 DDNS 记录切错网卡。
 
 ## 在线升级（GitHub Actions 云编译 + 设备主动拉取）
 

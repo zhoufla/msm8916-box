@@ -185,6 +185,11 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
       </div>
     </div>
     <div class="card" style="margin-top:10px">
+      <h3>网卡（IPv4 / IPv6）</h3>
+      <div id="ovNets"><div class="empty">加载中…</div></div>
+      <div class="hint" style="margin-top:8px">只列在线网卡；每张卡取一个主 IPv6 全球单播地址。DDNS 记录请在这里确认网卡名后再去选择。</div>
+    </div>
+    <div class="card" style="margin-top:10px">
       <h3>启用中的通道</h3>
       <div class="row" id="chChips"><span class="hint">加载中…</span></div>
     </div>
@@ -321,7 +326,6 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
       <div class="card"><h3>存储</h3><div id="sysStore"></div></div>
       <div class="card"><h3>流量</h3><div id="sysTraffic"></div></div>
     </div>
-    <div class="card" style="margin-top:10px"><h3>网卡</h3><div id="sysNet"></div></div>
   </section>
 
   <!-- WiFi：单射频，AP 与 station 二选一；当前模式高亮、另一个灰掉 -->
@@ -562,10 +566,10 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
         <span><button class="btn sm" onclick="addRecRow()">+ 添加记录</button> <button class="btn sm" onclick="delRecRow()">删除选中</button></span>
       </div>
       <table id="ddRecTbl">
-        <thead><tr><th style="width:28px"></th><th>域名</th><th>网卡（留空=自动：蜂窝优先）</th><th>记录类型</th><th>当前 v6</th><th>当前 v4</th><th>已推送</th><th>状态</th></tr></thead>
+        <thead><tr><th style="width:28px"></th><th>域名</th><th>网卡（必选）</th><th>记录类型</th><th>当前 v6</th><th>当前 v4</th><th>已推送</th><th>状态</th></tr></thead>
         <tbody id="ddRecBody"></tbody>
       </table>
-      <div class="hint">网卡名如 rmnet0 / wlan0 / ccmni0；记录类型 v4=仅 IPv4、v6=仅 IPv6、both=两个都推。Cloudflare 按 A/AAAA 记录自动增改（TTL 300）；DuckDNS 一条记录同时带 v4/v6。每次更新都计入系统日志。</div>
+      <div class="hint">网卡<b>必须选择</b>，下拉项来自设备当前在线网卡（可在「概览 → 网卡」查看 IPv4 / IPv6）；不再支持留空自动。记录类型 v4=仅 IPv4、v6=仅 IPv6、both=两个都推。Cloudflare 按 A/AAAA 记录自动增改（TTL 300）；DuckDNS 一条记录同时带 v4/v6。每次更新都计入系统日志。</div>
       <div class="row" style="margin-top:8px">
         <button class="btn sm primary" id="ddSave" onclick="saveDdCfg(this)">保存 DDNS 配置</button>
         <button class="btn sm" onclick="ddnsNow(this)">立即更新</button>
@@ -674,8 +678,7 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
           <button class="btn sm ghost" onclick="loadAdb()">刷新</button>
           <button class="btn sm primary" onclick="doAdb('restart')">一键重启 adbd</button>
           <button class="btn sm" onclick="doAdb('tcp')">切到 TCP 5555</button>
-          <button class="btn sm" onclick="doAdb('usb')">切回 USB</button>
-          <span class="hint">重启会断开当前 adb 连接并清掉半开连接；<b>不影响 8080 面板</b>。R=Recv-Q / S=Send-Q，ESTABLISHED 且队列非空即半开连接。切换模式需二次确认。</span>
+          <span class="hint">本机固定使用网络 adb（TCP 5555）。重启会断开当前 adb 连接并清掉半开连接；<b>不影响 8080 面板</b>。R=Recv-Q / S=Send-Q，ESTABLISHED 且队列非空即半开连接。切到 TCP 需二次确认。<b>USB adb 不由面板启用</b>：原厂 gadget 规则有缺陷，需要 <code>tools/hwfix/usbadb/enable.sh</code>，且启用后 5555 会 offline。</span>
         </div>
         <div id="adbConns" style="margin-top:8px"></div>
       </div>
@@ -1033,6 +1036,16 @@ function loadOverviewSys(){
       kv('网络',esc(d.netType||'-')+(s.tech?' · '+esc(s.tech):''))+
       kv('信号',(s.dbm?s.dbm+' dBm':'未知')+' <span class="chip '+(s.level>=3?'ok':s.level>0?'wait':'err')+'">'+esc(s.text||'')+'</span>')+
       kaRow(d.keepalive);
+    // 网卡（IPv4 / IPv6 / MAC）——概览页直接复用 /api/sys.nets
+    var nets=d.nets||[], nh='<table><tr><th>网卡</th><th>IPv4</th><th>IPv6</th><th>MAC</th></tr>';
+    for(var q=0;q<nets.length;q++){
+      var n=nets[q];
+      nh+='<tr><td class="mono">'+esc(n.name||'—')+'</td>'+
+          '<td class="mono">'+esc(n.ip||'—')+'</td>'+
+          '<td class="mono">'+esc(n.ip6||'—')+'</td>'+
+          '<td class="mono">'+esc(n.mac||'—')+'</td></tr>';
+    }
+    $('ovNets').innerHTML=nets.length?(nh+'</table>'):'<div class="empty">无可用网卡</div>';
     // 系统与运行
     var sw=d.webEnabled===false?'<span class="chip err">面板关闭</span>':'';
     $('ovSys').innerHTML=
@@ -1512,12 +1525,7 @@ function loadSys(){
       kv('总接收',fmtBytes(tf.rx))+kv('总发送',fmtBytes(tf.tx))+
       kv('移动网收',fmtBytes(tf.mobileRx))+kv('移动网发',fmtBytes(tf.mobileTx))+
       kv('USB 模式',esc(d.usb||d.adbd||'-'));
-    var nt='<table><tr><th>网卡</th><th>地址</th><th>MAC</th></tr>';
-    for(var q=0;q<(d.nets||[]).length;q++){
-      var n=d.nets[q];
-      nt+='<tr><td>'+esc(n.name)+'</td><td class="mono">'+esc(n.ip)+'</td><td class="mono">'+esc(n.mac||'-')+'</td></tr>';
-    }
-    $('sysNet').innerHTML=nt+'</table>';
+    // 网卡表格已移到「概览」页（ovNets），系统页不再重复渲染。
   });
 }
 
@@ -1827,7 +1835,7 @@ function loadAdb(){
   api('GET','/api/maint/adb',null,function(d){
     var box=$('adbStatus');
     if(!d.ok){ box.innerHTML='<span class="chip err">读取失败</span> '+esc(d.message||d.error||''); return; }
-    var modeChip=(d.mode==='tcp')?'<span class="chip ok">TCP 5555</span>':'<span class="chip wait">USB</span>';
+    var modeChip=(d.mode==='tcp')?'<span class="chip ok">网络 adb TCP 5555</span>':'<span class="chip err">未启用网络 adb</span>';
     var staleChip=(d.staleCount>0)?'<span class="chip err">'+d.staleCount+' 条半开连接</span>':'<span class="chip ok">无半开连接</span>';
     box.innerHTML=
       kv('模式',modeChip+' <span class="mono">'+esc(d.tcpPort||'-')+'</span>')+
@@ -1851,8 +1859,7 @@ function loadAdb(){
 function doAdb(a){
   if(a==='restart'&&!confirm('重启 adbd？当前 adb 连接会断开（8080 面板不受影响），用于清掉卡住的半开连接')) return;
   if(a==='tcp'&&!confirm('切到 TCP 5555？会重启 adbd，当前 adb 连接断开')) return;
-  if(a==='usb'&&!confirm('切回 USB？网络 adb（5555）会关闭，之后只能用 USB 连；8080 面板不受影响')) return;
-  var c=(a==='tcp')?'TCP':((a==='usb')?'USB':'');
+  var c=(a==='tcp')?'TCP':'';
   api('POST','/api/maint/adb',{action:a,confirm:c},function(d){
     toast(d.ok?d.message:(d.message||d.error||'失败'),!d.ok);
     setTimeout(loadAdb,2500);
@@ -1973,14 +1980,46 @@ function saveAlCfg(btn){
   });
 }
 /* ---------- DDNS 页：多条解析记录 ---------- */
+/* 网卡下拉：选项来自 /api/sys 的在线网卡；iface 必选，不再支持留空自动 */
+var ddIfaces=[], ddIfaceV6={}, ddCurV6='';
+function ddGuessIface(v6){
+  if(!v6) return '';
+  var any='';
+  for(var i=0;i<ddIfaces.length;i++){
+    var n=ddIfaces[i];
+    if(ddIfaceV6[n]===v6){
+      if(/^(rmnet|ccmni)/.test(n)) return n;   // 与原「蜂窝优先」自动探测保持一致
+      if(!any) any=n;
+    }
+  }
+  if(any) return any;
+  for(var j=0;j<ddIfaces.length;j++){ var m=ddIfaces[j]; if(/^(rmnet|ccmni)/.test(m)&&ddIfaceV6[m]) return m; }
+  for(var k=0;k<ddIfaces.length;k++){ if(ddIfaceV6[ddIfaces[k]]) return ddIfaces[k]; }
+  return '';
+}
+function ddDefaultIface(v6){ return ddGuessIface(v6)||ddIfaces[0]||''; }
+function ddIfaceSel(cur){
+  var list=ddIfaces.slice();
+  if(cur&&list.indexOf(cur)<0) list.unshift(cur);   // 旧配置里已离线的网卡也保留，避免丢值
+  if(!list.length) list=[''];
+  var h='<select class="ddRi">';
+  for(var i=0;i<list.length;i++){
+    var n=list[i], lab=n||'（无在线网卡）';
+    if(n===cur&&n&&ddIfaces.indexOf(n)<0) lab+='（当前离线）';
+    h+='<option value="'+esc(n)+'"'+(n===cur?' selected':'')+'>'+esc(lab)+'</option>';
+  }
+  return h+'</select>';
+}
 function recRowHtml(r){
   r=r||{};
   var fam=r.family||'both';
+  // 旧配置 iface 留空时，按当前生效的 v6 反推网卡，避免保存时误切到别的网卡
+  var ifc=r.iface||ddDefaultIface(r.curV6||ddCurV6||'');
   var pushed=[r.lastV4?('v4 '+r.lastV4):'',r.lastV6?('v6 '+r.lastV6):''].filter(Boolean).join(' / ');
   var st=r.lastError?('✗ '+esc(r.lastError)):(r.lastOkAt?('✓ '+new Date(r.lastOkAt).toLocaleString()):'—');
   return '<tr><td><input type="checkbox" class="ddChk"></td>'
     +'<td><input class="ddRd" value="'+esc(r.domain||'')+'" placeholder="mybox / dd.example.com"></td>'
-    +'<td><input class="ddRi" value="'+esc(r.iface||'')+'" placeholder="留空=自动"></td>'
+    +'<td>'+ddIfaceSel(ifc)+'</td>'
     +'<td><select class="ddRf"><option value="both"'+(fam==='both'?' selected':'')+'>IPv4 + IPv6</option>'
     +'<option value="v4"'+(fam==='v4'?' selected':'')+'>仅 IPv4</option>'
     +'<option value="v6"'+(fam==='v6'?' selected':'')+'>仅 IPv6</option></select></td>'
@@ -1990,8 +2029,22 @@ function recRowHtml(r){
     +'<td class="hint">'+st+'</td></tr>';
 }
 function loadDd(){
+  // 先取在线网卡列表，再渲染记录行，保证下拉里都是真实存在的网卡
+  api('GET','/api/sys',null,function(sy){
+    ddIfaces=[]; ddIfaceV6={};
+    var ns=(sy&&sy.ok)?(sy.nets||[]):[];
+    for(var i=0;i<ns.length;i++){
+      if(!ns[i]||!ns[i].name) continue;
+      ddIfaces.push(ns[i].name);
+      ddIfaceV6[ns[i].name]=ns[i].ip6||'';
+    }
+    loadDdCfg();
+  });
+}
+function loadDdCfg(){
   api('GET','/api/ddns',null,function(d){
     if(!d.ok){ $('ddStatus').textContent=d.message||d.error||''; return; }
+    ddCurV6=d.curV6||'';
     $('swDd').className='sw'+(d.enabled?' on':'');
     $('ddProvider').value=d.provider||'duckdns';
     $('ddInterval').value=d.intervalMin||10;
@@ -2032,7 +2085,8 @@ function saveDdCfg(btn){
     var dom=rows[i].getElementsByClassName('ddRd')[0].value.trim();
     if(!dom) continue;
     var ifc=rows[i].getElementsByClassName('ddRi')[0].value.trim();
-    if(ifc&&!/^[A-Za-z0-9._:-]{1,20}$/.test(ifc)){ toast('第 '+(i+1)+' 行网卡名只能含字母、数字与 . _ : -', true); return; }
+    if(!ifc){ toast('第 '+(i+1)+' 行必须选择网卡（下拉来自「概览 → 网卡」的在线网卡）', true); return; }
+    if(!/^[A-Za-z0-9._:-]{1,20}$/.test(ifc)){ toast('第 '+(i+1)+' 行网卡名只能含字母、数字与 . _ : -', true); return; }
     recs.push({domain:dom,iface:ifc,family:rows[i].getElementsByClassName('ddRf')[0].value});
   }
   if($('swDd').className.indexOf('on')>=0&&!recs.length){ toast('至少需要一条解析记录', true); return; }

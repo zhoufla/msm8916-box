@@ -259,11 +259,11 @@ cat /data/local/tmp/relay-helper/wd8080.state
 | 用例 | 内容 | 结果 |
 |---|---|---|
 | AD-01 | `GET /api/maint/adb` 无认证 401、带认证 200 且字段齐全 | ☑ |
-| AD-02 | `tcp` / `usb` 不带 `confirm` 被拒（`需要二次确认`） | ☑ |
+| AD-02 | `tcp` 不带 `confirm` 被拒（`需要二次确认`）；v1.8.3 起 `usb` 动作已移除，见 UI-06 | ☑ |
 | AD-03 | 非法 `action` 被白名单拒绝 | ☑ |
 | AD-04 | `keysCount` 正确（2 把公钥）；连接明细含 `recvQ/sendQ/stale` | ☑ |
 | AD-05 | `restart` 清掉半开连接，队列归零、adbd 仍 running | ☑ |
-| AD-06 | TCP→USB→TCP 可逆；切 USB 时 `/api/ping` 仍 200（面板不断） | ☑ |
+| AD-06 | v1.8.2 曾验证 TCP→USB→TCP 可逆、`/api/ping` 仍 200；**v1.8.3 起 USB 切换入口已移除**（只清 `service.adb.tcp.port` 并不能启用 USB adb，见第 11 节） | ☑ 历史 |
 | AD-07 | stale 判据回放：事故行 `R310 ESTABLISHED` → true；正常行 / `CLOSE_WAIT` → false | ☑ |
 | AD-08 | `adb connect 192.168.10.196:5555` → `device`，`adb shell id` = `uid=0(root)` | ☑ |
 | AD-09 | 真机造 ESTABLISHED 且队列非空的连接让面板标红 | ☐ 需 adbd 卡死，属破坏性，不做；改以事故原始行回放判定逻辑 |
@@ -287,3 +287,35 @@ cat /data/local/tmp/relay-helper/wd8080.state
 - **USB/TCP 切换测试布了 35 秒自动回滚兜底脚本**（幂等恢复 `tcp/5555`），验证完最终状态正常。
 - 残留：`crond.log` 的 `time disparity of 2050 minutes`（墙钟跳变）仍存在；
   WD-04 真实拔电、WD-09 ≥30min 长时、WD-10 24h 挂机仍未做；真硬件看门狗仍缺。
+
+## 11. v1.8.3 概览网卡 / DDNS 网卡必选专项
+
+> 基线：v1.8.3（versionCode 10803）· L0 224/0 · L1 `panel-e2e.sh` 72/72 · 设备 192.168.10.196
+
+| 用例 | 内容 | 结果 |
+|---|---|---|
+| UI-01 | `/api/sys.nets[]` 每条含 `name/ip/ip6/mac`，至少一张网卡同时有 IPv4 与全球单播 IPv6 | ☑ rmnet0 / wlan0 均带全球单播 v6 |
+| UI-02 | 首页「概览」显示网卡表格四列（网卡/IPv4/IPv6/MAC）；系统页不再重复出现网卡表格 | ☑ |
+| UI-03 | DDNS 记录的网卡是 `<select>`，选项来自当前在线网卡，无「留空=自动」 | ☑ options = rmnet0, wlan0 |
+| UI-04 | 网卡留空保存被拒（提示必须选择）；选定后 `/api/config` 里 `iface` 非空 | ☑ 逻辑回放，见下方说明 |
+| UI-05 | 旧配置 `iface=""` 的记录按当前生效的 v6 反推网卡（蜂窝优先），DDNS 不中断 | ☑ 回填 rmnet0 |
+| UI-06 | `POST /api/maint/adb {"action":"usb"}` 被拒；维护页无「切回 USB」按钮 | ☑ |
+
+- UI-04 会写一次 DDNS 配置：验收前记录原值，验收后恢复，避免影响正在工作的解析记录。
+- UI-05 只观察页面回填，不主动改用户配置。
+
+### 真机验证记录（2026-11-07 21:40 · v1.8.3 / 10803）
+
+- 部署：面板 root 通道 + 内网临时 HTTP，`sha256sum -c` 通过，`pm_rc=0`、
+  `ping_ok=0 loops=1`，`smsrelay-no-reboot` 由后台安装脚本自动删除。
+- `/api/sys.nets`：`rmnet0 10.48.17.147 / 2409:8961:260c:3e97:b372:3648:e030:5428`、
+  `wlan0 192.168.10.196 / 2409:8a60:2424:7490:a97:58ff:fe1a:afda`（MAC 仅 wlan0 有）。
+  `ip6` 字段每条都在；纯 IPv6 接口现在也不会被过滤掉。
+- `/api/ddns` 的 `curV6` 正好等于 `rmnet0.ip6`，因此旧记录 `iface=""` 被 `ddGuessIface`
+  精确回填为 `rmnet0`（蜂窝优先，与原自动探测一致），不会误切到 wlan0。
+- **UI-04 未实写配置**：`/api/config` 不返回 Cloudflare Token，直接 POST 会丢 Token 并打断
+  正在工作的 DDNS。改为抽取前端 JS 在 Node 里回放：`ddIfaceSel` 生成的 option 无空值、
+  `saveDdCfg` 含 `if(!ifc)` 必选拦截且从 `.ddRi.value` 读取；部署前后 `/api/config` 的
+  ddns 段逐字节一致（`enabled=true / cloudflare / sms.luoluo.site / family=v6 / iface=""`）。
+- L0 224/0、L1 `panel-e2e.sh` 72/72；`POST /api/maint/adb {"action":"usb"}` 返回
+  `ok=false / action 只能是 restart / tcp`；`tcp` 缺 confirm 仍被拒；`/api/health` 全绿。

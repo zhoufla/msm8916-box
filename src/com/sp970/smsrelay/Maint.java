@@ -160,14 +160,13 @@ public final class Maint {
                 if (!"TCP".equals(confirm)) throw new IllegalArgumentException("需要二次确认：confirm=TCP");
                 prefix = "setprop service.adb.tcp.port 5555; ";
                 label = "切到 TCP 5555";
-            } else if ("usb".equals(action)) {
-                if (!"USB".equals(confirm)) throw new IllegalArgumentException("需要二次确认：confirm=USB");
-                prefix = "setprop service.adb.tcp.port ''; ";
-                label = "切回 USB";
             } else {
-                throw new IllegalArgumentException("action 只能是 restart / tcp / usb");
+                throw new IllegalArgumentException("action 只能是 restart / tcp");
             }
-            // 绝不改 sys.usb.config：这台设备靠 rndis 提供 8080 面板，改了会连面板一起失联。
+            // 只动 adbd 传输层（service.adb.tcp.port），绝不碰 sys.usb.config：
+            // 8080 面板实际走 wlan0（WiFi）；USB gadget 的 functions 切换会重建 rndis0 并丢 IP，
+            // 真正启用 USB adb 是 tools/hwfix/usbadb/enable.sh 的职责（含补 IP 与看门狗回滚）。
+            // 本机 adbd 只服务一条传输，网络 adb 与 USB adb 不能并用，故面板只保留网络 adb。
             String cmd = prefix +
                     "stop adbd; sleep 2; start adbd; sleep 3; " +
                     "echo ADBD=$(getprop init.svc.adbd); " +

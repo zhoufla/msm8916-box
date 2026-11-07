@@ -21,6 +21,7 @@ import java.io.File;
 import java.io.FileReader;
 import java.lang.reflect.Method;
 import java.net.Inet4Address;
+import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.util.Collections;
@@ -562,6 +563,12 @@ public final class SysInfo {
         return 0;
     }
 
+    /**
+     * 在线网卡：IPv4 + IPv6 + MAC。
+     * 旧版只收有 IPv4 的网卡、且只报 IPv4，纯 IPv6 接口在面板上会消失。
+     * IPv6 取一个展示地址，优先级：全球单播（2000::/3，与 DdnsLogic.pickGlobalV6 同判据）
+     * → 其他非 link-local → link-local；地址上的 scope id（%wlan0）剥掉。
+     */
     private static JSONArray nets() {
         JSONArray arr = new JSONArray();
         try {
@@ -569,19 +576,36 @@ public final class SysInfo {
             for (int i = 0; i < ifs.size(); i++) {
                 NetworkInterface ni = ifs.get(i);
                 if (ni == null || ni.isLoopback() || !ni.isUp()) continue;
-                String ip = "";
+                String ip = "", ip6Global = "", ip6Other = "", ip6Link = "";
                 List<InetAddress> addrs = Collections.list(ni.getInetAddresses());
                 for (int j = 0; j < addrs.size(); j++) {
                     InetAddress a = addrs.get(j);
-                    if (a instanceof Inet4Address && !a.isLoopbackAddress()) {
-                        ip = a.getHostAddress();
-                        break;
+                    if (a == null || a.isLoopbackAddress() || a.isMulticastAddress()) continue;
+                    String s = a.getHostAddress();
+                    if (s == null) continue;
+                    int pct = s.indexOf('%');
+                    if (pct >= 0) s = s.substring(0, pct);
+                    if (s.length() == 0) continue;
+                    if (a instanceof Inet4Address) {
+                        if (ip.length() == 0) ip = s;
+                    } else if (a instanceof Inet6Address) {
+                        char c = s.charAt(0);
+                        if ((c == '2' || c == '3') && s.indexOf(':') >= 0) {
+                            if (ip6Global.length() == 0) ip6Global = s;
+                        } else if (a.isLinkLocalAddress()) {
+                            if (ip6Link.length() == 0) ip6Link = s;
+                        } else if (ip6Other.length() == 0) {
+                            ip6Other = s;
+                        }
                     }
                 }
-                if (ip.length() == 0) continue;
+                String ip6 = ip6Global.length() > 0 ? ip6Global
+                        : (ip6Other.length() > 0 ? ip6Other : ip6Link);
+                if (ip.length() == 0 && ip6.length() == 0) continue;
                 JSONObject o = new JSONObject();
                 o.put("name", ni.getName());
                 o.put("ip", ip);
+                o.put("ip6", ip6);
                 o.put("mac", mac(ni));
                 arr.put(o);
             }
