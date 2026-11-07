@@ -35,9 +35,10 @@ public class TestReceiver extends BroadcastReceiver {
             e.code = "";
             long evId = new Db(ctx).insertEvent(e);
             AppConfig cfg = AppConfig.load(ctx);
-            new Db(ctx).ensureDeliveries(evId, cfg.names());
+            Router.Result r = Router.routeAll(cfg.names());
+            new Db(ctx).ensureTargets(evId, r.targets);
             Log.i("SmsRelay", "test event injected: " + e.body + " evId=" + evId
-                    + " channels=" + cfg.names());
+                    + " targets=" + r.targets.size());
             ctx.startService(new Intent(ctx, RelayService.class));
         } catch (Throwable t) {
             Log.e("SmsRelay", "test inject failed", t);

@@ -24,15 +24,17 @@ import java.util.Locale;
 public final class Db extends SQLiteOpenHelper {
 
     private static final String NAME = "relay.db";
-    private static final int VER = 3;
+    private static final int VER = 4;
 
     private static final String CREATE_EV =
             "CREATE TABLE IF NOT EXISTS ev (id INTEGER PRIMARY KEY AUTOINCREMENT," +
-                    "hash TEXT UNIQUE, ts INTEGER, peer TEXT, body TEXT, code TEXT)";
+                    "hash TEXT UNIQUE, ts INTEGER, peer TEXT, body TEXT, code TEXT," +
+                    "rule TEXT DEFAULT '')";
     private static final String CREATE_DL =
             "CREATE TABLE IF NOT EXISTS dl (id INTEGER PRIMARY KEY AUTOINCREMENT," +
                     "ev_id INTEGER, ch TEXT, status INTEGER DEFAULT 0, tries INTEGER DEFAULT 0," +
-                    "next_at INTEGER DEFAULT 0, err TEXT DEFAULT '', UNIQUE(ev_id, ch))";
+                    "next_at INTEGER DEFAULT 0, err TEXT DEFAULT ''," +
+                    "prio INTEGER DEFAULT 0, template TEXT DEFAULT '', UNIQUE(ev_id, ch))";
     private static final String CREATE_OUT =
             "CREATE TABLE IF NOT EXISTS out (id INTEGER PRIMARY KEY AUTOINCREMENT," +
                     "ts INTEGER, peer TEXT, body TEXT, parts INTEGER DEFAULT 1," +
@@ -61,6 +63,12 @@ public final class Db extends SQLiteOpenHelper {
             return;
         }
         if (oldVersion < 3) db.execSQL(CREATE_OUT);
+        if (oldVersion < 4) {
+            // P0-A 规则引擎：投递优先级 + 模板覆盖（dl），丢弃规则标记（ev.rule）
+            db.execSQL("ALTER TABLE dl ADD COLUMN prio INTEGER DEFAULT 0");
+            db.execSQL("ALTER TABLE dl ADD COLUMN template TEXT DEFAULT ''");
+            db.execSQL("ALTER TABLE ev ADD COLUMN rule TEXT DEFAULT ''");
+        }
     }
 
     // ---------- 收信 ----------
@@ -145,18 +153,43 @@ public final class Db extends SQLiteOpenHelper {
 
     /** 为每个通道建一条投递记录（已存在则跳过）。 */
     public void ensureDeliveries(long evId, List<String> channels) {
+        if (channels == null) return;
+        List<Router.Target> ts = new ArrayList<Router.Target>();
+        for (int i = 0; i < channels.size(); i++) {
+            ts.add(new Router.Target(channels.get(i), 0, null));
+        }
+        ensureTargets(evId, ts);
+    }
+
+    /** 规则路由结果建投递：带优先级与模板覆盖（已存在则跳过）。 */
+    public void ensureTargets(long evId, List<Router.Target> targets) {
         if (evId <= 0) return;
         try {
             SQLiteDatabase db = getWritableDatabase();
-            for (int i = 0; i < channels.size(); i++) {
+            for (int i = 0; i < targets.size(); i++) {
+                Router.Target t = targets.get(i);
                 ContentValues v = new ContentValues();
                 v.put("ev_id", evId);
-                v.put("ch", channels.get(i));
+                v.put("ch", t.ch);
                 v.put("status", 0);
                 v.put("tries", 0);
                 v.put("next_at", 0);
+                v.put("prio", t.prio);
+                if (t.template != null && t.template.length() > 0) v.put("template", t.template);
                 db.insertWithOnConflict("dl", null, v, SQLiteDatabase.CONFLICT_IGNORE);
             }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 记录丢弃规则名（action=drop 的消息仍入库，面板可见、可人工重发）。 */
+    public void setEventRule(long evId, String rule) {
+        if (evId <= 0) return;
+        try {
+            ContentValues v = new ContentValues();
+            v.put("rule", rule == null ? "" : rule);
+            getWritableDatabase().update("ev", v, "id=?",
+                    new String[]{String.valueOf(evId)});
         } catch (Throwable ignored) {
         }
     }
@@ -166,9 +199,10 @@ public final class Db extends SQLiteOpenHelper {
         Cursor c = null;
         try {
             c = getReadableDatabase().rawQuery(
-                    "SELECT d.id,d.ev_id,d.ch,e.ts,e.peer,e.body,e.code,d.tries,d.err " +
+                    "SELECT d.id,d.ev_id,d.ch,e.ts,e.peer,e.body,e.code,d.tries,d.err,d.prio,d.template " +
                             "FROM dl d JOIN ev e ON e.id=d.ev_id " +
-                            "WHERE d.status=0 AND d.next_at<=? ORDER BY d.id LIMIT " + limit,
+                            "WHERE d.status=0 AND d.next_at<=? " +
+                            "ORDER BY d.prio DESC, d.next_at, d.id LIMIT " + limit,
                     new String[]{String.valueOf(System.currentTimeMillis())});
             while (c.moveToNext()) {
                 Deliver d = new Deliver();
@@ -181,6 +215,8 @@ public final class Db extends SQLiteOpenHelper {
                 d.code = c.getString(6);
                 d.tries = c.getInt(7);
                 d.err = c.getString(8);
+                d.prio = c.getInt(9);
+                d.template = c.getString(10) == null ? "" : c.getString(10);
                 out.add(d);
             }
         } catch (Throwable ignored) {
@@ -308,7 +344,7 @@ public final class Db extends SQLiteOpenHelper {
         Cursor c = null;
         try {
             c = getReadableDatabase().rawQuery(
-                    "SELECT id,ts,peer,body,code FROM ev ORDER BY id DESC LIMIT " + limit
+                    "SELECT id,ts,peer,body,code,rule FROM ev ORDER BY id DESC LIMIT " + limit
                             + " OFFSET " + offset, null);
             while (c.moveToNext()) {
                 JSONObject o = new JSONObject();
@@ -320,6 +356,8 @@ public final class Db extends SQLiteOpenHelper {
                 o.put("peer", nz(c.getString(2)));
                 o.put("body", nz(c.getString(3)));
                 o.put("code", nz(c.getString(4)));
+                String rule = nz(c.getString(5));
+                if (rule.length() > 0) o.put("rule", rule);
                 o.put("deliveries", deliveries(id));
                 arr.put(o);
             }

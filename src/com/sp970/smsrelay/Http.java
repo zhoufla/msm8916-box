@@ -10,7 +10,9 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URLDecoder;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -48,12 +50,55 @@ public final class Http {
         }
     }
 
+    // ---------- 访问令牌与 CORS（P0-B，纯 JDK 便于桌面单测） ----------
+
+    /** 恒时比较访问令牌；配置为空一律 false——令牌认证只认显式配置的值。 */
+    public static boolean tokenMatches(String configured, String presented) {
+        if (configured == null || configured.length() == 0) return false;
+        if (presented == null || presented.length() == 0) return false;
+        try {
+            return java.security.MessageDigest.isEqual(
+                    configured.getBytes("UTF-8"), presented.getBytes("UTF-8"));
+        } catch (UnsupportedEncodingException e) {
+            return false;
+        }
+    }
+
+    /** 清理 CORS 允许来源列表：trim、去空、去重、封顶 16 条；"*" 原样保留。 */
+    public static List<String> normalizeCors(List<String> raw) {
+        List<String> out = new ArrayList<String>();
+        if (raw == null) return out;
+        for (String s : raw) {
+            if (s == null) continue;
+            s = s.trim();
+            if (s.length() == 0 || out.contains(s)) continue;
+            if (out.size() >= 16) break;
+            out.add(s.length() > 200 ? s.substring(0, 200) : s);
+        }
+        return out;
+    }
+
+    /** 该 Origin 是否放行：空列表=不启用 CORS；含 "*"=任意来源；否则精确（忽略大小写）匹配。 */
+    public static boolean corsAllowed(List<String> cors, String origin) {
+        if (cors == null || cors.isEmpty() || origin == null || origin.length() == 0) return false;
+        for (String s : cors) {
+            if ("*".equals(s) || s.equalsIgnoreCase(origin)) return true;
+        }
+        return false;
+    }
+
+    /** 流式响应回调（SSE）：stream() 返回后连接即关闭；抛异常按客户端断开处理。 */
+    public interface Streamer {
+        void stream(OutputStream out) throws Exception;
+    }
+
     /** 待发送的响应。 */
     public static final class Resp {
         public int status = 200;
         public String contentType = "application/json; charset=utf-8";
         public byte[] body = new byte[0];
         public Map<String, String> headers = new LinkedHashMap<String, String>();
+        public Streamer stream;  // 非空时走流式分支（SSE），忽略 body 与 Content-Length
 
         public static Resp json(String s) {
             return text(200, "application/json; charset=utf-8", s);
@@ -78,6 +123,14 @@ public final class Http {
             return r;
         }
 
+        /** SSE 等流式响应：body 忽略，streamer 写完即断开连接。 */
+        public static Resp stream(Streamer s) {
+            Resp r = new Resp();
+            r.contentType = "text/event-stream; charset=utf-8";
+            r.stream = s;
+            return r;
+        }
+
         public static Resp error(int status, String msg) {
             String m = msg == null ? "" : msg.replace("\\", "\\\\").replace("\"", "\\\"");
             return text(status, "application/json; charset=utf-8",
@@ -95,6 +148,13 @@ public final class Http {
     private final Handler handler;
     private final AtomicInteger conns = new AtomicInteger(0);
     private volatile boolean running = false;
+    private static final ThreadLocal<Socket> CUR_SOCK = new ThreadLocal<Socket>();
+
+    /** 当前三连处理线程的 Socket（供 SSE 探测对端 EOF）；非连接线程返回 null。 */
+    public static Socket currentSocket() {
+        return CUR_SOCK.get();
+    }
+
     private ServerSocket server;
     private Thread acceptThread;
 
@@ -183,6 +243,7 @@ public final class Http {
         try {
             sock.setSoTimeout(20000);
             sock.setTcpNoDelay(true);
+            CUR_SOCK.set(sock);
             InputStream in = new BufferedInputStream(sock.getInputStream(), 8192);
             OutputStream out = sock.getOutputStream();
 
@@ -205,6 +266,8 @@ public final class Http {
             }
         } catch (Throwable ignored) {
             // 客户端断开、超时、浏览器预连接，都走这里，不需要处理
+        } finally {
+            CUR_SOCK.remove();
         }
     }
 
@@ -277,6 +340,7 @@ public final class Http {
     private boolean write(Socket sock, Req req, Resp resp, boolean keepAlive) {
         try {
             OutputStream out = sock.getOutputStream();
+            if (resp.stream != null) return writeStream(resp, out);
             StringBuilder sb = new StringBuilder();
             sb.append("HTTP/1.1 ").append(resp.status).append(' ').append(reason(resp.status))
                     .append("\r\n");
@@ -292,6 +356,29 @@ public final class Http {
             if (!"HEAD".equals(req.method)) out.write(resp.body);
             out.flush();
             return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 流式分支（SSE）：无 Content-Length，写完即断连；SoTimeout 只约束读，不影响长时间写出。 */
+    private boolean writeStream(Resp resp, OutputStream out) {
+        try {
+            StringBuilder sb = new StringBuilder();
+            sb.append("HTTP/1.1 ").append(resp.status).append(' ').append(reason(resp.status))
+                    .append("\r\n");
+            sb.append("Content-Type: ").append(resp.contentType).append("\r\n");
+            sb.append("Cache-Control: no-store\r\n");
+            for (Map.Entry<String, String> e : resp.headers.entrySet()) {
+                sb.append(e.getKey()).append(": ").append(e.getValue()).append("\r\n");
+            }
+            sb.append("Connection: close\r\n\r\n");
+            out.write(sb.toString().getBytes("UTF-8"));
+            out.flush();
+            if (resp.body != null && resp.body.length > 0) out.write(resp.body);
+            out.flush();
+            resp.stream.stream(out);
+            return false;
         } catch (Throwable t) {
             return false;
         }

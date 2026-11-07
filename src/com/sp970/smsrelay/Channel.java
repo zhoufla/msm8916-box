@@ -10,6 +10,8 @@ public final class Channel {
      * 占位符见 {@link Tpl}：{peer} {body} {device} {tag} {time}。
      */
     public static final String DEFAULT_TEMPLATE = "{peer}\n{body}\n设备：{device}";
+    /** 含验证码的消息且通道/规则都没自定义模板时使用：验证码放最前面。 */
+    public static final String DEFAULT_CODE_TEMPLATE = "【{code}】{peer}\n{body}\n设备：{device}";
 
     public String name = "";
     public String type = "webhook";     // webhook | dingtalk

@@ -98,7 +98,7 @@ public final class SysInbox {
                 o.put("message", "入队失败，看面板「维护 → 日志」的 sysinbox 段");
                 return o;
             }
-            db.ensureDeliveries(id, AppConfig.load(ctx).names());
+            db.ensureTargets(id, Router.routeAll(AppConfig.load(ctx).names()).targets);
             RelayService.wake(ctx);
             boolean dup = db.events() == before;    // 计数没涨 = 命中已有事件
             o.put("ok", true);

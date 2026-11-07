@@ -53,6 +53,7 @@ public class RelayService extends Service {
         Logs.add("svc", "服务启动");
         SysInfo.listen(this);
         WebPanel.start(this);
+        MobileKeepalive.start(this);
         worker = new Thread(new Runnable() {
             @Override
             public void run() {
@@ -66,6 +67,7 @@ public class RelayService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         scheduleWatchdog();
+        MobileKeepalive.wake();     // 配置可能刚改过，别等下一轮
         synchronized (lock) {
             lock.notifyAll();
         }
@@ -80,6 +82,7 @@ public class RelayService extends Service {
     @Override
     public void onDestroy() {
         running = false;
+        MobileKeepalive.stop(this);
         WebPanel.stop();
         SysInfo.unlisten(this);
         Logs.add("svc", "服务销毁");
@@ -135,6 +138,8 @@ public class RelayService extends Service {
                 if (sent > 0) db.prune();
                 Update.tick(this);          // 到点才真的去查，内部自己起线程
                 Maint.tick(this);           // 定时体检落盘，异常进日志，内部自己起线程
+                Alerts.tick(this);          // 定时告警评估（状态翻转推送），内部自己起线程
+                Ddns.tick(this);            // DDNS 兜底巡检（变更才更新），内部自己起线程
             } catch (Throwable t) {
                 android.util.Log.e("SmsRelay", "loop", t);
             }

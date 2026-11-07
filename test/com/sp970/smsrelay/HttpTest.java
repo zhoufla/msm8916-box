@@ -81,6 +81,39 @@ public class HttpTest {
         for (int i = 0; i < 20; i++) ts[i].join();
         System.out.println("7 concurrent : " + ok[0] + "/20 ok");
 
+        // 7b SSE 流式响应：无 Content-Length、事件推流、写完即断连
+        Http h2 = new Http(18081, new Http.Handler() {
+            public Http.Resp serve(Http.Req req) {
+                if ("/events".equals(req.path)) {
+                    return Http.Resp.stream(new Http.Streamer() {
+                        public void stream(java.io.OutputStream out) throws Exception {
+                            out.write("event: status\ndata: {\"ok\":true,\"n\":1}\n\n".getBytes("UTF-8"));
+                            out.flush();
+                            Thread.sleep(150);
+                            out.write("event: status\ndata: {\"ok\":true,\"n\":2}\n\n".getBytes("UTF-8"));
+                            out.flush();
+                        }
+                    });
+                }
+                return Http.Resp.error(404, "nope");
+            }
+        });
+        h2.start();
+        Socket es = new Socket("127.0.0.1", 18081);
+        es.setSoTimeout(5000);
+        es.getOutputStream().write("GET /events HTTP/1.1\r\nHost: x\r\n\r\n".getBytes("UTF-8"));
+        InputStream ein = es.getInputStream();
+        ByteArrayOutputStream egot = new ByteArrayOutputStream();
+        byte[] ebuf = new byte[512];
+        int en;
+        while ((en = ein.read(ebuf)) >= 0) egot.write(ebuf, 0, en);
+        String etxt = egot.toString("UTF-8");
+        es.close();
+        h2.stop();
+        System.out.println("7b sse        : " + (etxt.contains("text/event-stream")
+                && etxt.contains("event: status") && etxt.contains("\"n\":2")
+                && !etxt.contains("Content-Length") ? "ok" : "BAD " + etxt));
+
         h.stop();
         Thread.sleep(300);
         System.out.println("8 stopped    : " + (!h.isRunning()));

@@ -46,7 +46,7 @@ public final class SmsEvent {
     }
 
     private static final Pattern CODE_CTX = Pattern.compile(
-            "(?:验证码|校验码|动态码|确认码|激活码|提取码|code)[^0-9]{0,10}(\\d{4,8})",
+            "(?:验证码|验证密码|动态码|动态密码|校验码|确认码|激活码|提取码|code)[^0-9]{0,10}(\\d{4,8})",
             Pattern.CASE_INSENSITIVE);
 
     /**

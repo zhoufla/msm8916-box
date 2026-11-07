@@ -24,8 +24,21 @@ public final class Sender {
 
             if (ch.isDingTalk()) {
                 String tagPart = ch.nzTag().length() > 0 ? "[" + ch.nzTag() + "] " : "";
-                // 正文按通道模板渲染，默认就是三行：发件人 / 内容 / 设备名
-                String content = Tpl.render(ch.nzTemplate(), d.peer, d.body, device,
+                // 正文按通道模板渲染，默认就是三行：发件人 / 内容 / 设备名；
+                // 规则命中时 d.template 覆盖通道模板（webhook 载荷不受模板影响）
+                // 正文按模板渲染：规则覆盖 > 通道自定义 > 默认（验证码消息默认把验证码前置）
+                String tpl;
+                if (d.template != null && d.template.length() > 0) {
+                    tpl = d.template;
+                } else if (ch.template != null && ch.template.trim().length() > 0
+                        && !ch.template.equals(Channel.DEFAULT_TEMPLATE)) {
+                    tpl = ch.template;
+                } else if (d.code != null && d.code.length() > 0) {
+                    tpl = Channel.DEFAULT_CODE_TEMPLATE;
+                } else {
+                    tpl = Channel.DEFAULT_TEMPLATE;
+                }
+                String content = Tpl.render(tpl, d.peer, d.body, d.code, device,
                         ch.nzTag(), isoTime(d.ts));
                 JSONObject o = new JSONObject();
                 if (ch.isMarkdown()) {

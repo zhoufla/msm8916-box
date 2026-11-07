@@ -29,7 +29,11 @@ public final class Inbox {
                     e.ts = d > 0 ? d : System.currentTimeMillis();
                     e.code = SmsEvent.extractCode(e.body);
                     long id = db.insertEvent(e);
-                    if (id > 0) db.ensureDeliveries(id, cfg.names());
+                    if (id > 0) {
+                        Router.Result r = Router.route(e, cfg.rules, cfg.names(), cfg.rulesDefault);
+                        if (r.drop) db.setEventRule(id, r.rule);
+                        else db.ensureTargets(id, r.targets);
+                    }
                 }
             }
             added = db.events() - before;

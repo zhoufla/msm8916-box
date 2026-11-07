@@ -13,7 +13,7 @@
 |---|---|
 | `SmsReceiver` | 监听 `SMS_RECEIVED`（优先级 999），不抢占默认短信 App，4.4 收到广播即转发 |
 | `RelayService` | 常驻前台服务：扫库 → 多通道并发投递 → 标记成功/失败；同时托管 Web 面板 |
-| `Db` | SQLite 三表：`ev`（收信本体，号码+内容+90s 窗口去重）+ `dl`（消息×通道投递状态，退避 1/2/4/8/16/30min，上限按通道配置）+ `out`（发件记录） |
+| `Db` | SQLite 三表：`ev`（收信本体，号码+内容+命中规则+90s 窗口去重）+ `dl`（消息×通道投递状态，带规则优先级与模板覆盖，退避 1/2/4/8/16/30min，上限按通道配置）+ `out`（发件记录） |
 | `Sender` | 钉钉（text 或 markdown 卡片，可选 SEC 加签）/ 通用 webhook（JSON + 可选 X-Token），多设备标签，UTF-8 |
 | `SmsSender` / `SendReceiver` | 面板发短信：分片发送，逐片回写结果 |
 | `Inbox` | 补收：把系统收件箱里漏转发的短信补进队列 |
@@ -23,6 +23,7 @@
 | `WifiCtl` | 热点启停与 SSID/密码、station 开关、驱动与硬件区分、网卡 MAC/IP、ARP 客户端、扫频 |
 | `Update` / `Net` | 在线升级：GitHub Release 或任意 manifest；sha256 + 签名 + versionCode 三重校验；依次尝试 su / 机器自带 web 后台 root 通道 / 系统安装器 |
 | `Logs` | 内存环形日志，面板「最近日志」直读 |
+| `MobileKeepalive` | LTE 短信保活：WiFi 在线时保持一条 `MOBILE_HIPRI` 链路，每 10s 在 `rmnet0` 上发一个 ICMP 包，解决基带空闲态漏寻呼导致的短信延迟（详见下节） |
 | `TestReceiver` | 调试通道（见下） |
 | 保活 | 前台通知 + START_STICKY + AlarmManager 5min 兜底 + PARTIAL_WAKE_LOCK |
 
@@ -36,6 +37,93 @@
 
 验证码类短信自动提取 4~8 位数字进 `code` 字段。
 
+### LTE 短信保活（`MobileKeepalive`）
+
+SP970-B 的 2015 年 MPSS 基带在 LTE 空闲态（ECM-IDLE）会漏掉网络寻呼：手机信号、
+注册状态都正常，但短信要等几分钟，或者等下一次主动上网才集中下来。这是基带固件问题，
+换 APN/换卡都无效。
+
+保活思路（与 `SMSRelay8916` 的 `smsrelay-keepalive` 一致）：
+
+1. WiFi 仍是默认上行，不切移动数据；
+2. 通过 `ConnectivityManager` 的 `MOBILE_HIPRI` 特性额外拉起一条移动数据 PDP（`rmnet0`）；
+3. 每 10 秒以 root 身份执行 `busybox ping -I rmnet0 -c 1 -W 3 223.5.5.5`，让基带保持连接态；
+4. 把 `android.telephony.apn-restore` 设为 `2000000000`，绕过 4.4
+   `ConnectivityService$FeatureUser` 默认 60 秒过期（否则链路每分钟被拆一次）；
+5. 连续 6 次 ping 不通时自动停/启 HIPRI 重建链路（5 分钟冷却）。
+
+开机后基带/数据附着通常要 1~2 分钟，这期间 `startUsingNetworkFeature` 可能返回 `2`
+（`APN_TYPE_NOT_AVAILABLE`），线程会每 10 秒重试，附着完成后自动连上，不需要手工干预。
+
+配置段（`/sdcard/smsrelay.conf`，缺省即开启）：
+
+```json
+"keepalive": {
+  "enabled": true,
+  "intervalSec": 10,
+  "target": "223.5.5.5",
+  "iface": "rmnet0",
+  "restoreMs": 2000000000
+}
+```
+
+- **流量**：约 0.5 MB/天，需要 SIM 有可用数据流量；没有流量套餐时把 `enabled` 设为 `false`。
+- **依赖**：ping 需要 raw socket，app uid 没有权限，所以必须走 `relay-helper` root 通道；
+  helper 不在线时保活会记录错误并等待恢复。
+- **注意**：`ping -I <rmnet0 的 IP>` 在这台机器上会走 wlan0、100% 丢包，必须用网卡名 `-I rmnet0`。
+- 面板「概览 → 蜂窝与信号」会显示保活状态；`GET /api/keepalive` 返回完整状态。
+- 面板「维护 → LTE 保活」可直接改开关/间隔/目标/网卡/`restoreMs` 并保存，保存后经
+  `RelayService.wake()` 立即生效（间隔/目标/开关都不用重启服务）。
+
+### 告警推送（`Alerts`）
+
+设备侧自己出问题不能靠「人去看面板」发现，所以阈值告警主动推到短信转发通道（合成
+`peer="ALERT"` 的消息，复用 `Sender`；不进转发记录，推送失败只记日志，绝不影响转发主链路）：
+
+- **事件源**：体检判据异常（modem SSR / RIL / SIM / 内存 / 面板 8080 / 进程，同一套
+  `Maint.checkup` 判据）、流量月配额（`trafficGb`>0 时启用，按「流量清零」以来的累计收+发）、
+  低电量（`batteryPct`>0 时启用，仅未充电时告警）、LTE 保活重建与恢复（即时事件，
+  不受检查间隔限制）。
+- **推送语义**：状态**翻转才推**——进入异常推一次、恢复推一次；持续异常每 `remindH`
+  小时（默认 6h）重复提醒一次。进程重启后状态清零，重启后首个周期会重新推一次。
+- **配置**（`alerts` 段，面板「维护 → 告警推送」卡片）：
+
+```json
+"alerts": {"enabled": false, "channels": [], "remindH": 6, "intervalMin": 5,
+           "trafficGb": 0, "batteryPct": 0, "keepalive": true}
+```
+
+- `channels` 留空 = 推给全部启用通道；填通道名列表则只推这些（引用已删除的通道会被跳过）。
+- 默认关闭（`enabled: false`），避免升级后突然给钉钉群里发消息。
+
+### DDNS 动态域名（`Ddns`）
+
+出门在外要回访面板，但出口 IP 随时会变。DDNS 把当前可达地址推到域名服务商：
+
+- **地址来源**：station 模式报 NAT 出口 IPv4（api.ipify.org 探测）；IPv6 没有中间 NAT，
+  直接报接口上的全球单播地址（默认 rmnet 优先、其次 wlan；`iface` 可指定网卡，
+  指定后只看这一张）。蜂窝 IPv4 是运营商 CGNAT
+  （100.64/10），公网不可达，**不报、不误导**。`family` 选择推 v4 / v6 / 两者（默认 both）。
+  面板状态行实时显示「当前 v6」（本地枚举，不用等推送成功）；`iface` 指定时还显示该网卡 IPv4。
+- **多条解析**：`records` 数组最多 20 条，每条独立的 `domain` + `iface` + `family`；
+  服务商/Token/Zone 全局共用一份。面板有独立「DDNS」页签（表格逐行添加/删除）。
+  旧的单条 `domain/iface/family` 配置自动迁移为 `records[0]`。每次更新逐条写日志
+  （`已更新 域名@网卡 → v4/v6`），失败汇总经「告警推送」通知。
+- **服务商**：DuckDNS（GET 一把带 `ip=`/`ip6=`）与 Cloudflare API v4（查 zone →
+  A/AAAA 记录有则 PATCH 无则 POST，TTL 300）。HTTPS 走 `Net`（自写 TLS 客户端，
+  握不上手退系统 curl——与自升级同一条链路）。
+- **推送策略**：变更才更新（v4|v6 成对比对），`intervalMin`（默认 10 分钟）兜底巡检；
+  更新失败经「告警推送」通知（含恢复通知）；面板 Token 框留空保存=保持原值。
+- **配置**（`ddns` 段，面板「维护 → DDNS 动态域名」卡片）：
+
+```json
+"ddns": {"enabled": false, "provider": "duckdns", "domain": "mybox",
+         "token": "", "zone": "", "intervalMin": 10, "insecure": false,
+         "iface": "", "family": "both",
+         "records": [{"domain": "mybox", "iface": "", "family": "both"},
+                     {"domain": "mybox6", "iface": "rmnet0", "family": "v6"}]}
+```
+
 ### 通道字段
 
 | 字段 | 说明 |
@@ -45,12 +133,48 @@
 | `url` | 必须 http(s) 开头；为空则该通道不投递 |
 | `secret` | 钉钉加签（SEC 开头），配了才带 timestamp/sign |
 | `token` | webhook 的 `X-Token` 请求头 |
-| `template` | 正文字模板，默认 `{peer}\n{body}\n设备：{device}`（第一行发件人、第二行内容、第三行设备名）。占位符：`{peer}` `{body}` `{device}` `{tag}` `{time}` |
+| `template` | 正文字模板，默认 `{peer}\n{body}\n设备：{device}`（第一行发件人、第二行内容、第三行设备名）。占位符：`{peer}` `{body}` `{code}` `{device}` `{tag}` `{time}`。**验证码消息默认前置**：识别出验证码且通道/规则都没自定义模板时，自动改用 `【{code}】{peer}\n{body}\n设备：{device}`；自定义了模板（通道或规则）则完全按自定义 |
 | `format` | 钉钉专用：`text`（默认）/ `markdown` 卡片 |
 | `title` | markdown 卡片标题，空则自动「短信 · 设备 · 号码」 |
 | `tag` | 多设备标签：写进钉钉卡片标题与 webhook 载荷；要在正文里出现就用 `{tag}` 占位符 |
 | `maxTries` | 该通道失败重试上限（1~50，默认 10） |
 | `enabled` | 是否启用 |
+
+### 转发规则（短信规则引擎）
+
+收到的短信按 `rules` 数组**顺序**求值，命中规则的通道并入投递目标（同通道取最高优先级）；
+没有规则命中时按 `rulesDefault` 兜底：`all`（默认，投给全部启用通道，向后兼容）或 `drop`。
+
+```json
+"rulesDefault": "all",
+"rules": [
+  {"name": "otp",  "peer": ["^106\\d+$", "^955"], "body": ["验证码|code"],
+   "channels": ["运维群"], "priority": 100, "stop": true},
+  {"name": "bank", "peer": ["95588", "95533"], "channels": ["银行群"]},
+  {"name": "ads",  "body": ["退订|优惠|贷款"], "action": "drop"}
+]
+```
+
+| 字段 | 说明 |
+|---|---|
+| `name` | 必填且唯一（保存时校验），转发记录与日志按它标记 |
+| `enabled` | 缺省 `true` |
+| `peer` / `body` | 正则数组（部分匹配，不强制整串）；数组内任一命中即算命中该字段，两个字段同时给时是 AND |
+| `channels` | 命中后投递的通道名列表；`action: drop` 时可省 |
+| `priority` | 0~1000（默认 0）。投递循环按优先级先发验证码，失败重试也不会排到普通消息后面 |
+| `template` | 命中该规则的投递用这个正文模板覆盖通道模板（占位符同通道字段表） |
+| `from` / `to` | 生效时段 `HH:mm`，支持跨零点（如 `23:00`→`04:00`） |
+| `stop` | 命中后不再评估后续规则 |
+| `action` | `relay`（默认）/ `drop`。drop = 照常入库并记录命中的规则名，只是不投递（转发记录里显示「已丢弃」） |
+
+- 数据库升级到 VER=4：`ev` 多一列 `rule`，`dl` 多 `prio`/`template` 两列，老库启动时自动
+  `ALTER TABLE`，无需手工迁移。
+- 规则只管**自动路径**（短信广播、补收）。人工动作有显式意图，不走规则：
+  面板「重发」与注入测试、系统收件箱单条转发都投给全部通道。
+- 面板：**短信 → 转发配置** 页新增「转发规则」卡片——JSON 文本框 + 保存前校验 +
+  匹配测试器（输入号码/正文，显示命中哪条规则、投给谁、优先级多少）。
+- API：`POST /api/rules/validate`（只校验不落盘）与 `POST /api/rules/test`（现拼一条事件
+  跑规则，回显命中链与投递目标，不落库）。
 
 ## Web 面板
 
@@ -61,10 +185,18 @@
 "web": {"enabled": true, "port": 8080, "user": "admin", "pass": "admin"}
 ```
 
+`web` 段还有两个可选字段：
+
+- **`token`（访问令牌）**：配置后 `Authorization: Bearer <token>` 与
+  `?access_token=`（EventSource 场景）可与账号密码并存，适合 curl / Home Assistant /
+  快捷指令等外部集成；恒时比较，留空=仅账号密码。面板「维护 → 设备与面板」可一键生成。
+- **`cors`（允许来源）**：配置了才回 `Access-Control-Allow-Origin` 并放行 OPTIONS 预检；
+  `"*"` 放行任意来源，数组=精确匹配（忽略大小写，最多 16 条）。留空=不发 CORS 头（原行为）。
+
 八个页面：**概览**（队列/设备/信号/最近日志）· **短信**（三个子页签，列表均分页每页 20 条：
 **系统收件箱** 只读浏览系统短信 + 已转发标记 + 单条转发 / 补收全部 · **短信发送** 发短信 +
-发送记录 · **转发配置** 转发记录（收信 + 每通道投递状态、重发、注入测试、清理已放弃）+
-通道增删改 + 配置文件来源）·
+发送记录 · **转发配置** 转发记录（收信 + 每通道投递状态、命中规则标记、重发、注入测试、清理已放弃）+
+通道增删改 + 转发规则（JSON 编辑 + 校验 + 匹配测试）+ 配置文件来源）·
 **系统**（硬件/系统/存储/流量/网卡）· **WiFi**（热点开关与 SSID/密码、station 开关、
 无线网卡与 MAC/IP、客户端、扫频、隐藏 SSID/关联上限/踢客户端）· **网络**（APN、网络制式、
 数据/漫游开关、SIM 锁、流量统计、网络诊断）· **升级** · **维护**（root 命令框、体检、日志、
@@ -77,6 +209,10 @@
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/status` | 概览：设备、面板、通道、队列计数 |
+| GET | `/api/events` | SSE 实时推送概览状态（变更即推 + 15s 心跳 + 30min 重连），连接上限 3 |
+| GET | `/api/ddns` | DDNS 状态：配置 + 上次推送地址/时间/错误 |
+| POST | `/api/ddns/now` | 立即触发一次 DDNS 更新（后台执行） |
+| GET | `/api/keepalive` | LTE 保活状态：开关、HIPRI、rmnet0 地址、最近 ping、失败次数 |
 | GET | `/api/sys` | 系统信息全量 |
 | GET | `/api/messages?page=1&page_size=20` | 转发记录分页（收信 + 每通道投递状态），回 `total/page/page_size`；旧 `limit` 参数仍兼容 |
 | GET | `/api/sysinbox?page=1&page_size=20` | 系统收件箱只读分页，每条带 `relayed` 已转发标记；ROM 不给总数时 `total=-1` |
@@ -86,6 +222,8 @@
 | POST | `/api/inbox/import` | 补收系统收件箱 |
 | POST | `/api/messages/delete` | 删收信：`{"id":123}` 单条（连投递一起删），`{"scope":"givenup"}` 清全部「已放弃」投递及因此变空的消息 |
 | POST | `/api/send` | 发短信（`{"to","body"}`） |
+| POST | `/api/rules/validate` | 校验转发规则 JSON（`{"rules":[...]}`，可选 `"channels"` 用外部通道名集合），坏正则/重名/越界回 400 |
+| POST | `/api/rules/test` | 规则匹配测试（`{"rules":[...],"peer","body"}`，可选 `"channels"`/`"rulesDefault"`），回命中链与投递目标，不落库 |
 | GET | `/api/outbox?page=1&page_size=20` | 发件记录分页，回 `total/page/page_size`；旧 `limit` 参数仍兼容 |
 | POST | `/api/outbox/delete` | 删发件记录（`{"id":3}`，只删记录不动已发的短信） |
 | GET | `/api/config` | 当前生效配置 + 来源文件 + 面板状态 |
@@ -142,7 +280,16 @@ curl 示例：
 
 ```sh
 curl -u admin:admin http://192.168.42.129:8080/api/status
+curl -N -u admin:admin http://192.168.42.129:8080/api/events   # SSE 实时推送，Ctrl-C 退出
 curl -u admin:admin -X POST -d '{"to":"10086","body":"1"}' http://192.168.42.129:8080/api/send
+```
+
+配置了 `web.token` 后，外部系统（Home Assistant / 快捷指令 / 脚本）可只用令牌调全部 API，
+含 `/api/send` 对外发信接口（不需要 Basic 弹窗）：
+
+```sh
+curl -H "Authorization: Bearer <token>" \
+     -d '{"to":"10086","body":"1"}' http://192.168.42.129:8080/api/send
 ```
 
 ## 维护通道：relay-helper（替代 webkey 的地基）
@@ -226,7 +373,7 @@ git tag v1.3.0 && git push origin v1.3.0
 ```sh
 sh build.sh                    # 产物 dist/com.sp970.smsrelay-<ver>.apk + dist/latest.json
 VER=1.4.0 VC=10400 sh build.sh  # CI 用：版本号/versionCode 从环境变量注入
-sh tools/run-tests.sh  # 离线测试：通道 JSON/钉钉载荷/验证码/退避/HTTP 服务，不需要设备
+sh tools/run-tests.sh  # 离线测试：通道 JSON/钉钉载荷/验证码/退避/转发规则引擎/HTTP 服务，不需要设备
 ```
 
 `aapt` 会把 `assets/web/index.html` 打进包，所以改了页面必须重新构建。
@@ -345,6 +492,11 @@ adb shell am broadcast -a com.sp970.smsrelay.TEST --ez importinbox true
 两者都**不写 boot 分区、不刷机、可一键回滚**，`boot.img` 与出厂备份逐字节一致。
 注意本机 adbd 只服务一条传输：**USB adb 与网络 adb 不能同时使用**，切换方式见该目录 README。
 
+> 面板「USB 模式」取内核的 `/sys/class/android_usb/android0/functions`
+> （`dumpsys usb` 里的 `Kernel function list`），不读 `persist.sys.usb.config`。
+> 后者是出厂默认组合名（本机 `charging,none,adb`，即 `Default Functions`），
+> 而 `sys.usb.state` 会被原厂第 618 行的坏规则伪报成 `rndis,adb`，都不能代表实际模式。
+
 ## 路线图
 
 - [x] **Web 面板**：App 内嵌 HTTP 服务（端口 8080+），浏览器直连 192.168.42.129 管理
@@ -354,8 +506,18 @@ adb shell am broadcast -a com.sp970.smsrelay.TEST --ez importinbox true
 - [x] **系统信息**：信号/电量/流量/存储/uptime（App 内 getprop+dumpsys 直读）
 - [x] **WiFi 控制**：热点启停、SSID/密码修改、客户端列表、扫频
 - [x] 钉钉 markdown 卡片消息、多设备标签（`tag`）、webhook 通道重试策略独立配置（`maxTries`）
-- [ ] 面板访问令牌（免 Basic 弹窗，方便嵌到其他系统）
-- [ ] 短信规则：关键字/号码白名单过滤，验证码单独走低延迟通道
+- [x] **面板访问令牌**：`web.token` 配置后 Bearer 头 / `?access_token=` 与 Basic 并存（恒时比较），
+  面板一键生成随机令牌；顺带支持 `web.cors` 跨域白名单与 OPTIONS 预检——外部系统可只用
+  令牌调全部 API（含对外发信）
+- [x] **概览 SSE 实时化**：`/api/events` 变更即推（≤1s），无变更 15s 心跳，30 分钟强制重连，
+  连接上限 3；新短信（queue.events 增长）联动刷新短信页；root 采集类接口（sys/logs）
+  在 SSE 激活时降频 60s 补拉；面板 `EventSource` 断线自动降级回轮询（MQTT 需要外部 broker，不采用）
+- [x] **DDNS 动态域名**：station 报 NAT 出口 IPv4、IPv6 直报全球单播地址（蜂窝 CGNAT 不误报）；
+  可指定 IPv6 网卡（`iface`）与推送类型（`family`：v4/v6/both）；面板状态行实时显示当前 IPv6；
+  DuckDNS / Cloudflare 双服务商，变更才更新 + 失败接告警推送
+- [x] **短信规则引擎**：规则数组按序求值（号码/正文正则、时段、优先级、stop、模板覆盖），
+  `drop` 入库不转发、未命中按 `rulesDefault` 兜底；`dl.prio` 让验证码在投递循环里插队；
+  面板规则卡片 + `/api/rules/validate|test`（详见「转发规则」一节）
 - [x] **维护通道（B0 + B1）**：开机自启的 root helper + 静默升级 + 命令框 + 电源管理 +
   日志打包 + 一键体检 + 健康自检 + 备份恢复 + 文件下载 + 定时任务 + LED 定位
 - [x] **B2 换卡救砖**：APN 增删改/首选切换（content provider + `svc data` 重连）、
@@ -365,7 +527,8 @@ adb shell am broadcast -a com.sp970.smsrelay.TEST --ez importinbox true
   WiFi 高级按真机能力收敛为：隐藏 SSID / 最大关联数 / 自动信道 / 踢客户端（hostapd_cli）——
   改信道、改发射功率、MAC 白名单在这台裁剪 hostapd + QCA 驱动上没有可用原语，明确不做。
   （待办：冷启动后重跑一次开机窗口验证 `verify 5 --reboot`）
-- [ ] 定时任务：定时重启热点、定时补收、低电量告警（crontab 已可写，缺预设模板）
+- [ ] 定时任务：定时重启热点、定时补收（crontab 已可写，缺预设模板）——低电量告警已并入
+  「告警推送」（`alerts.batteryPct`）
 
 ### B2 落地补充（2026-11-06 深夜真机验证）
 
@@ -397,7 +560,7 @@ adb shell am broadcast -a com.sp970.smsrelay.TEST --ez importinbox true
 msm8916-box/
 ├── AndroidManifest.xml        # API 19，短信/WiFi/电话状态权限
 ├── build.sh                   # aapt→javac→d8→zipalign→apksigner 六步流水线
-├── src/com/sp970/smsrelay/    # 34 个类（本次新增 SysInbox.java），无第三方依赖，无 res/
+├── src/com/sp970/smsrelay/    # 40 个类（含 Router.java、Alerts.java、AlertLogic.java、Ddns.java、DdnsLogic.java、MobileKeepalive.java），无第三方依赖，无 res/
 ├── assets/web/index.html      # 面板单页（8 个顶级 tab，短信内含 3 个子页签，aapt -A assets 打包）
 ├── test/                      # 离线测试源码（纯 JVM，tools/run-tests.sh 驱动）
 ├── config/smsrelay.conf.example

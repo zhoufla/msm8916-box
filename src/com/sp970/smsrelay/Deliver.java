@@ -18,6 +18,9 @@ public final class Deliver {
     public String code = "";
     public int tries;
     public String err = "";
+    /** 规则引擎：本条投递的优先级与模板覆盖（due() 从 dl 表带出）。 */
+    public int prio;
+    public String template = "";
 
     public SmsEvent toEvent() {
         SmsEvent e = new SmsEvent();
