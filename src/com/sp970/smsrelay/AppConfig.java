@@ -60,6 +60,10 @@ public final class AppConfig {
     public String helperUrl = "http://127.0.0.1:8899";
     public String helperToken = "sp970-relay-2026";
 
+    // 系统收件箱镜像（JZ02 fork）：收到短信时把 Broadcast 事件写一份进 content://sms/inbox。
+    // auto=没有默认短信 App 才写（SP970 上自动等于 off）；on=强制；off=关。
+    public String mirrorInbox = InboxMirror.AUTO;
+
     // 维护段
     public boolean maintHealthEnabled = true;
     public int maintHealthIntervalMin = 30;
@@ -244,6 +248,11 @@ public final class AppConfig {
             JSONObject root = new JSONObject(json);
             String d = root.optString("device", "");
             if (d.length() > 0) device = d;
+
+            String mi = root.optString("mirrorInbox", "").trim().toLowerCase();
+            if ("on".equals(mi) || "true".equals(mi) || "1".equals(mi)) mirrorInbox = InboxMirror.ON;
+            else if ("off".equals(mi) || "false".equals(mi) || "0".equals(mi)) mirrorInbox = InboxMirror.OFF;
+            else if (mi.length() > 0) mirrorInbox = InboxMirror.AUTO;
 
             JSONObject web = root.optJSONObject("web");
             if (web != null) {
@@ -505,6 +514,7 @@ public final class AppConfig {
             hp.put("url", meta == null ? "http://127.0.0.1:8899" : meta.helperUrl);
             hp.put("token", meta == null ? "sp970-relay-2026" : meta.helperToken);
             root.put("helper", hp);
+            if (meta != null) root.put("mirrorInbox", meta.mirrorInbox);
             JSONObject mt = new JSONObject();
             mt.put("healthEnabled", meta == null || meta.maintHealthEnabled);
             mt.put("healthIntervalMin", meta == null ? 30 : meta.maintHealthIntervalMin);
@@ -577,6 +587,8 @@ public final class AppConfig {
         return "{\n" +
                 "  \"device\": \"" + Build.MODEL + "\",\n" +
                 "  \"web\": {\"enabled\": true, \"port\": 8080, \"user\": \"admin\", \"pass\": \"admin\"},\n" +
+                "  \"helper\": {\"url\": \"http://127.0.0.1:8899\", \"token\": \"sp970-relay-2026\"},\n" +
+                "  \"mirrorInbox\": \"auto\",\n" +
                 "  \"keepalive\": {\"enabled\": true, \"intervalSec\": 10, \"target\": \"223.5.5.5\", \"iface\": \"rmnet0\"},\n" +
                 "  \"rulesDefault\": \"all\",\n" +
                 "  \"rules\": [],\n" +

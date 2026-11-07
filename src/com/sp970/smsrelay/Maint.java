@@ -73,7 +73,9 @@ public final class Maint {
             "echo '##USB'; getprop sys.usb.state; " +
             "echo '##SECURE'; getprop ro.adb.secure; " +
             "echo '##KEYS'; ls -l /data/misc/adb/adb_keys 2>&1; " +
-            BB + " wc -l < /data/misc/adb/adb_keys 2>&1; " +
+            // wc -l 依赖文件以换行结尾：JZ02 实机 adb_keys 只有一行且无结尾换行，wc 恒报 0。
+            // busybox awk 的 NR 不看结尾换行，两台设备一致。
+            "echo '##KEYCOUNT'; " + BB + " awk 'END{print NR}' /data/misc/adb/adb_keys 2>&1; " +
             "echo '##NETSTAT'; " + BB + " netstat -nt; " +
             "echo '##END'";
 
@@ -96,8 +98,13 @@ public final class Maint {
                     String t = line.trim();
                     if (t.contains("adb_keys") && !t.contains("No such file")
                             && !t.contains("not found")) keysPresent = true;
+                }
+            }
+            List<String> kc = sec.get("KEYCOUNT");
+            if (kc != null) {
+                for (String line : kc) {
                     try {
-                        keysCount = Integer.parseInt(t);
+                        keysCount = Integer.parseInt(line.trim());
                     } catch (Throwable ignored) {
                     }
                 }

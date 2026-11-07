@@ -55,6 +55,8 @@ public class RelayService extends Service {
         SysInfo.listen(this);
         WebPanel.start(this);
         MobileKeepalive.start(this);
+        // JZ02：收件箱镜像落地后，把 app 库里已有、provider 里没有的历史消息回填一次
+        InboxMirror.backfillAsync(this);
         worker = new Thread(new Runnable() {
             @Override
             public void run() {

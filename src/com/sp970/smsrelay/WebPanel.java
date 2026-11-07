@@ -782,6 +782,16 @@ public final class WebPanel {
         }
         o.put("total", r.optInt("total", -1));
         o.put("messages", r.optJSONArray("messages"));
+        try {
+            // 收件箱镜像状态（JZ02 fork）：auto 模式且无默认短信 App = 已开启
+            String mode = AppConfig.load(app).mirrorInbox;
+            boolean on;
+            if (InboxMirror.OFF.equals(mode)) on = false;
+            else if (InboxMirror.ON.equals(mode)) on = true;
+            else on = InboxMirror.noDefaultSmsApp(app);
+            o.put("mirror", on);
+        } catch (Throwable ignored) {
+        }
         return o.toString();
     }
 

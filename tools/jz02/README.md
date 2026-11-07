@@ -703,3 +703,284 @@ VOICE_REGISTRATION_STATE {1, 33d4, 03a6cf43, 14, …}   ← REGISTERED，LAC/CID
 - QPST 里 `Preferred Band`（UMTS 段）只勾了 `W-850`/`IMT 2100`——本次
   LTE+CSFB 下话音直接注册，没暴露频段问题。若后续出现 GSM 回落类话音问题，
   下一个排查点就是频段配置（GSM 900/1800）。
+
+
+<!-- jz02-mdss-vsync-storm-2026-11-07 -->
+
+## v7.2：mdss vsync 风暴 —— JZ02 比 SP970 高负载高温的根因（实测对拍）
+
+> 背景问句：「差不多硬件，JZ02 内存占用更少，但负载和温度始终比 SP970 高」。
+> 用网络 adb（SP970 `192.168.10.196:5555`）做了同口径对拍，结论如下。
+
+### 对拍数据（同为 Android 4.4.4 / msm8916，SP970-B `4GWiFi`）
+
+| 指标 | SP970 | JZ02 |
+|---|---|---|
+| 服务数（init.svc running） | **57（更多）**：多出 audiod/GPS loc_launcher/qcamerasvr/ims 全家/dpmd/atfwd/ril-daemon1 | 51（v7 已精简） |
+| SoC 温区（tsens 0/1/2/4/5） | 46/44/44/42/44 ℃ | **50/47/45/47/47 ℃（高 4~5 ℃）** |
+| pm8916_tz | 38.1 ℃ | **44.7 ℃** |
+| 20s 采样 busy | 24.7%（4 核合计） | 26.6%（相当） |
+| 其中 **内核态（sys）** | 12.3% | **19.5%（偏高）** |
+| `mdss_fb0` kthread | utime+stime ≈ **0.8%** 单核 | **10.5% 单核（13 倍）**，恒 D 态 |
+| `ksmd` | 内核根本没编（无 /sys/kernel/mm/ksm） | 3.3% 单核（见下） |
+| MDSS GIC 中断（GIC 104） | **142,436 个 / 开机 3.4h（≈11.7Hz，正常 vsync）** | **0 个（面板链路自开机即死）** |
+| dmesg 显示路径 | 干净（`mdss_fb_release` 正常收尾） | **每秒风暴**（见下） |
+
+### 根因：DSI panel 无响应 + framework 按照样连播帧
+
+```
+<3> __mdss_fb_sync_buf_done_callback: mdp-fence: frame timeout
+<4> mdss_mdp_video_pollwait: vsync poll timed out! rc=-110 status=0x0 mask=0x8000000
+```
+
+JZ02 的 DSI panel 等不到 vsync（无实体屏/panel 死路），但 SF 持有 fb0 且
+MDP 按 video mode 连续合成，每帧 vsync 轮询整段超时 → `mdss_fb0` 内核线程
+忙等（10.5% 单核纯 sys 时间）+ 恒 D 态拉高 loadavg + SoC 持续发热。
+SP970 同款驱动、同 fb0 持有者（SF + display 助手）零报错。
+
+### 修复（已验证）：`echo 4 > /sys/class/graphics/fb0/blank`
+
+- **立即生效**：风暴日志停、`mdss_fb0` stime 30s **零增长**（原每 20s +211 ticks）。
+- **无副作用**：framework 不受影响（`boot_completed=1`、`smsrelay`/8080/8899/
+  modem ONLINE 全正常）——与 `stop surfaceflinger` 会 wedge 框架是两回事，
+  blank 是系统自身的 suspend 路径（DSI 关屏命令 0x28 发送失败的 dmesg 报错无害）。
+- **持久化**：`relay-helper/start.sh`（repo 版本化，deploy 重推）在
+  `ro.product.device=UFI` 门控下延迟 90s 写一次 `blank=4`；blank 文件不可读
+  （cat 为空），无法做幂等比较，每 boot 一次即可（framework 自身不会重新拉亮）。
+
+### KSMD（关闭，已执行 2026-11-07）
+
+- `/init.target.rc`（boot ramdisk，改不了）开启：run=1、sleep 500ms、pages_to_scan=100。
+- 实测烧 **3.3% 单核**；收益是去重 **pages_sharing≈2964 页 ≈ 11.6MB 内存**
+  （SP970 内核没有这功能）。
+- **已执行关闭**（用户拍板）：运行时 `echo 0 > /sys/kernel/mm/ksm/run`
+  （ksmd stime 20s 零增长验证）+ 落盘：
+  `/system/etc/init.qcom.post_boot.sh` OEM 的
+  `echo 1 > .../ksm/deferred_timer`（第 469 行）后追加
+  `echo 0 > /sys/kernel/mm/ksm/run  # jz02 v7.2: ksm off`，每次开机在
+  init.target.rc 开启之后再关掉，时序成立（post_boot 晚于 on boot 属性段）。
+- 恢复：把 post_boot 里那行 `echo 0` 删掉重启，即回 OEM 默认（ksmd 常驻）。
+
+### 「还有什么可以精简」的对拍结论
+
+1. **服务面没有更肥的目标**：SP970（参照机）跑的服务反而比精简后的 JZ02 更多，
+   JZ02 服务清单已见底；再省只能进 kernel/battery 级。
+2. **负载/温度的主项是上述 vsync 风暴**（已修），其余差异为毫巴级杂音。
+3. KSMD 已按用户拍板关闭（见上节）；两个内核级热点（mdss 风暴 + ksm）清零后，
+   JZ02 的 sys 态负荷应降到 SP970 以下。
+
+### ⚠ loadavg 在本 ROM 上是失真指标
+
+修复后复查发现：JZ02 恒有 **5 个常驻 D 态内核线程**
+（`mdss_dsi_event`、`mdss_fb_splash`、`mdss_fb0`、`kworker/u8:0`、`kworker/u9:0`），
+SP970 有 4 个同款——loadavg 被「计数里的 D」结构性垫底到 **4.5~5.5**，
+与实际 CPU 无关（`mdss_fb0` 修复后从「D+忙等」变「D+纯睡」，loadavg 数字
+但 CPU 0）。因此：
+
+- 不要用 loadavg 跨机对比或判定精简效果；v7 表里的 2.14 属瞬态读数（D 线程
+  生命周期窗口），典型稳态读数两台都在 4~5.5。
+- 健康度量正确姿势：`/proc/stat` 20s 采样算 busy%、tsens 温区、`mdss_fb0`
+  utime+stime 增量、ssr crash_count。
+- 修复后 JZ02 实测：`mdss_fb0` 30s 零增长、SoC 50→49℃ 起步回落
+  （PMIC 44.7→43.2℃），温度随时间继续收敛。
+
+## v8：系统收件箱镜像 + ADB 面板真机验证（2026-11-07，app 1.8.6 / 10806）
+
+### 背景：JZ02 的「系统收件箱」为什么永远是空的
+
+JZ02 精简后系统里**没有任何短信应用**（连默认短信 App 都没有），Android 4.4 的
+短信 provider `content://sms/inbox` 因此永远真空：收到的短信只进本 app 的转发
+链路（记录正常），面板「系统收件箱」「补收」是死页面。
+
+SP970 不受影响——它的 Mms 是默认短信 App，收到短信会照常写 provider。
+
+### 方案：把收到的事件镜像写进 provider（app 1.8.6 `InboxMirror.java`）
+
+配置项 `mirrorInbox: auto|on|off`（默认 `auto`）：
+
+- `auto`：**只在设备没有默认短信 App 时启用**（SP970 上自动等于 off，绝不双写）；
+- `on`/`off`：强制开/关（JZ02 交付配置用 `on`）。
+
+写路径分两级：
+
+1. **app 进程直写**：未来若有默认短信 App 授权给本 app 时零开销；
+   4.4 上非默认短信 App 写收件箱吃 `SecurityException`（预期），转 2；
+2. **root 代理**：经 relay-helper 跑
+   `CLASSPATH=<apk> app_process /system/bin com.sp970.smsrelay.InboxMirror insert|batch …`
+   —— 走 `ActivityThread.systemMain()` 起系统 context（**必须先 `Looper.prepare()`**），
+   再 `AMS.getContentProviderExternal("sms")` 拿 IContentProvider 直调
+   `insert(callingPkg, uri, cv)`，uid=0 绕开 4.4 写权限。直接
+   `ContentResolver.insert` 会报 "Unable to find app for caller"（调用方没有注册的
+   ApplicationThread）。
+
+写之前按「号码+内容+90s 窗口」查 provider 判重，与 Db 判重口径一致——系统收件箱
+页面的「已转发」标记和补收业务因此都成立。
+
+### 这台 ROM 上的三个关键坑（真机验证）
+
+1. **`content` CLI 的 date 显示按 32 位截断**——但 DB 里存的是正确的 Long。
+   不要相信 `content query` 显示的 date；写日期必须走 provider insert
+   （Long 原样入库），校真实值要直连 `mmssms.db` 读（probe 的 `sql` 模式）。
+2. **`content delete` 在这台 ROM 上是空操作**（返回提示但行不删）。删 provider 行
+   只能 root 直连 SQLite：`SQLiteDatabase.openDatabase(
+   /data/data/com.android.providers.telephony/databases/mmssms.db, OPEN_READWRITE)`
+   + `DELETE FROM sms WHERE _id IN (...)`，再补一句清孤儿
+   `DELETE FROM threads WHERE _id NOT IN (SELECT DISTINCT thread_id FROM sms)`。
+3. **KitKat 的 `Looper.prepare()` 重复调用抛 `RuntimeException`**
+   （"Only one Looper may be created per thread"），**不是** `IllegalStateException`。
+   只 catch 后者 → batch 模式第 1 行成功、其余行全部异常被吞（表面上"OK 1"），
+   一批回填只进 1 条。三处修法：catch `RuntimeException`；单行失败现在
+   `Log.i("SmsRelay-mirror", …)` 输出到 logcat（不污染 stdout 的 `OK n` 协议）。
+
+### 竞态修复：镜像操作全部串行化
+
+最初 `storeAsync`（收信即时镜像）与服务启动回填各起各线程，都会先查provider
+再写——并发窗口里查不到对方 → **同一条写两遍**（真机复现过）。v1.8.6 起
+收件箱镜像的全部操作（store / 回填 / root 代理调用）走同一个
+`newSingleThreadExecutor`（daemon）：先写者胜，后来者 providerHas 必然命中，
+且 root 的 app_process 调用天然不并发。
+
+### 真机验证（JZ02, 1.8.6）
+
+- TEST 广播注入 → root 代理镜像成功，ts/iso 正确、面板带 `relayed:true` ✓；
+- 删掉 provider 内 2 条有 ev 记录的行 → 触发服务回填，batch 一次补写，判重窗口工作 ✓；
+- 重装后再次全链路：回填「检查 6 条，补写 0 条」，收件箱零重复 ✓；
+- 面板 `/api/sysinbox` `total` 与消息列表干净，`mirror:true` 标志正常 ✓。
+
+### ADB 面板真机验证 + keysCount 修复
+
+`GET /api/maint/adb`（Basic admin/admin）在 JZ02 实测有效：
+`mode=tcp、tcpPort=5555、adbd=running、usbState=rndis,adb、connections=[ESTABLISHED]、staleCount=0`。
+修复一个原有 bug：keysCount 用 `wc -l` 对**无结尾换行**的 authorized_keys 文件
+恒报 0，改为 `busybox awk 'END{print NR}'`，实测 1 ✓。
+
+### ⚠ sqlite3 缺失 —— 上游 Radio.java 的 APN 读写在 JZ02 需后续排查
+
+JZ02 精简掉了 `/system/xbin/sqlite3`（也没有 `/system/bin/sqlite3`）。上游用
+外部 sqlite3 CLI 读 telephony 库做 APN 读写的代码路径在 JZ02 上静默失效。
+收件箱镜像没有依赖它（直连 `SQLiteDatabase` / provider API），但如果后续要
+动 APN 相关功能，先解决 DB 读取通道。
+
+### 验证工具
+
+`tools/jz02/provider-write-probe/`（`test.sh` 编译打包 → push
+`/data/local/tmp/tiny.jar` → `app_process` 跑 `t.Tiny`）：
+
+- `insert <address> <body> <ts>`：provider 路径原型（本功能可行性验证用）；
+- `batchraw <peer1> <body1> <ts1> …`：逐行带回显的 batch 复现（找坑 3 用的）；
+- `delsql <ids>` / `sql`：删行 / 直读 mmssms.db 两个运维模式；
+- `batch <b64json>`：与 InboxMirror 同构，验证 JSON 协议。
+
+probe 原型经验已固化进 `InboxMirror.java`，probe 仅作后续排障工具保留。
+
+### 版本
+
+- 1.8.6（versionCode 10806），`dist/com.sp970.smsrelay-1.8.6.apk`，
+  sha256=22dcf4e89d0cdf7b…（build.sh 输出为准），已 `-r` 重装至真机并全链路验证。
+
+## v9：最小默认短信 App 化（2026-11-08，app 1.8.7 / 10807）
+
+### 决策
+
+不再目标「装一个完整短信 App」（SP970 的 Mms 太重、进 priv-app、内存回归），
+而是把**本 app 变成 4.4 意义上的默认短信 App**：收到短信由 framework 点对点
+投递给本 app，收件箱写权限（OP_WRITE_SMS）由框架自动授予——root 代理从
+「收件箱镜像主路径」降级为 fallback。SP970 也用同一机制停用原装 Mms。
+
+### 组件要求（4.4.4 `SmsApplication.isComplete` 校验集，安卓 manifest 四件套）
+
+| 组件 | intent | 权限属性（调用方需持有） |
+|---|---|---|
+| `SmsDeliverReceiver` | `android.provider.Telephony.SMS_DELIVER` | `BROADCAST_SMS` |
+| `WapPushReceiver` | `android.provider.Telephony.WAP_PUSH_DELIVER` + mime `application/vnd.wap.mms-message` | `BROADCAST_WAP_PUSH` |
+| `RespondViaMessageService` | `android.intent.action.RESPOND_VIA_MESSAGE` + scheme `smsto` | `SEND_RESPOND_VIA_MESSAGE` |
+| `SendToActivity` | `ACTION_SENDTO` + scheme `sms/smsto/mms/mmsto` | （无） |
+
+全部是 no-op/薄壳（本 app 不做 MMS、无会话 UI）；权限写在本组件上表示
+调用方（phone 进程/拨号 UI）需持有，本 app 无需申请。
+
+### 双播去重（KitKat 入站两腿，实测源码确认）
+
+4.4.4 `InboundSmsHandler` 只发一次 SMS_DELIVER：有默认 App 时点对点投给默认 App
+的 SMS_DELIVER 接收器；广播完成后 framework 的 resultReceiver 再把同一条 PDU 以
+`SMS_RECEIVED_ACTION` 广播给所有接收方（legacy 腿，无默认 App 时 JZ02 今天靠这腿工作）。
+默认化后本 app 两条腿都会收到 → 事件落库靠 `Db.insertEvent` 的
+peer+body+ts±90s 判重天然吸收（同 PDU 两腿 ts 完全相同），投递/镜像均不双发。
+`SmsReceiver.handle(+leg=deliver|legacy)` 两腿共用同一处理入口，日志带腿别。
+
+### 默认化操作与 OP 自愈（这台 ROM 没有 appops CLI）
+
+`tools/jz02/set-default-sms.ps1`（`-CheckOnly` / `-Unset` / `-MmsDisable` /
+`-MmsEnable`，SP970 记得 `-AdbServer tcp:5037`）：
+
+1. `settings put secure sms_default_application com.sp970.smsrelay`（持久化）；
+2. OP_WRITE_SMS 放行：本 ROM 把 `appops` CLI 也精简了，**依赖框架自愈**——
+   framework 每收到一条真实 SMS 都会调
+   `SmsApplication.getDefaultSmsApplication(ctx, updateIfNeeded=true)`：
+   校验四组件 → 放行本包 OP_WRITE_SMS → 把旧默认 App 的 OP 降级 ignored →
+   重建 SENDTO preferred activity。所以设置后**第一条真实短信到达即完成接管**；
+3. 自愈与设置均持久化，重启不回退。
+
+已验证（真机，10086 CXLL 实测回路）：
+- `settings get secure sms_default_application` = `com.sp970.smsrelay` ✓；
+- probe `checkdefault` 四组件 `COMPLETE` ✓（`tools/jz02/provider-write-probe` 的
+  tiny.jar，纯 PM 查询——root app_process 代理没注册 ApplicationThread，碰
+  Settings/`SmsApplication` 反射会吃 `Unable to find app for caller`，这是已知边界）；
+- **真实短信验证**：给 10086 发 `CXLL`（TEST 广播 `--es sendto 10086 --es body CXLL`），
+  回复数秒到达，framework 日志实证：
+  · `recv 10086 … leg=deliver` —— SMS_DELIVER 点对点投给了我们的接收器（默认化生效）；
+  · 随后 `recv 10086 … leg=legacy` —— legacy 腿同 PDU 再次入库，被 Db 判重吸收，
+    钉钉只投一次、收件箱只写一行 ✓；
+  · `appops.xml` 出现 `<op n="15" />`（OP_WRITE_SMS 由框架自愈放行）✓。
+
+### 第四个坑：WRITE_SMS 必须在 manifest 声明（装机时就答复）
+
+真实短信时镜像第一次仍走 root 代理，异常带出真相：
+`Permission Denial: writing … SmsProvider … requires android.permission.WRITE_SMS`
+——provider 写放行是**两层**：manifest 声明 WRITE_SMS（4.4 上 protectionLevel=dangerous，
+装机即授）**+** AppOps OP_WRITE_SMS（默认 App/自愈给）。只靠 OP 一层，
+没声明 manifest 权限时装机权限检查直接拒绝。修复=`<uses-permission
+android:name="android.permission.WRITE_SMS"/>`，之后 TEST 广播实证
+`收件箱镜像成功（app 直写）`——root 代理降级为 fallback（直写先试，SecurityException
+才转 root），entry 日志会带出受限的异常消息文本便于观测。
+
+### SP970 停用原装短信 App
+
+SP970 仍可用（默认 5037 adb server）：
+
+```
+./set-default-sms.ps1 -AdbServer tcp:5037 -Serial <SP970_usb_serial> -MmsDisable
+```
+
+`pm disable-user com.android.mms` 后 Mms 不再写收件箱/发通知，收件箱统一由本 app
+负责（reflect `setDefaultApplication` 会把 Mms 的 OP_WRITE_SMS 自动降为 ignored，
+脚本里 extra 也补了）。回退：`./set-default-sms.ps1 -AdbServer tcp:5037 … -Unset`
+再 `-MmsEnable`。**注意**：SP970 的 jz02 fork 配置示例 `config/smsrelay.conf.jz02.example`
+不适用 SP970；SP970 上 `mirrorInbox` 保持 `auto`（Mms 停用后 `noDefaultSmsApp`
+自动变 true，不需要改配置），改默认后直接走 app 直写。
+
+**SP970 实测记录（2026-11-08，网络 adb `192.168.10.196:5555`，串口别再用
+`tcp:5037 -s 0`——那是 USB 侧挂的 JZ02）**：
+
+- 此前「SP970 无 mms 包」的结论是误查 JZ02 所得——SP970 实际有
+  `com.android.mms`，且曾是 `sms_default_application`，收件箱 17 行真机短信由它写；
+  SP970 实测清单（都确认过）：`pm path com.sp970.smsrelay`、
+  `settings get secure sms_default_application`、`pm list packages | grep mms`。
+- 装 1.8.7 `-r` → probe `checkdefault` 四组件 `COMPLETE` ✓ →
+  `set-default-sms.ps1 -AdbServer tcp:5037 -Serial 192.168.10.196:5555 -MmsDisable`：
+  settings ✓、Mms `disabled-user` ✓（appops CLI 两台都缺，容错跳过）。
+- **10086 CXLL 真实回路**（TEST 广播 `--es sendto 10086 --es body CXLL`）：
+  `leg=deliver` 点对点 ✓ → `[mirror] 收件箱镜像成功（app 直写）`（**首试成功**，
+  连 JZ02 的首轮 OP 竞态都没有——provider 写依据 manifest 声明的 `WRITE_SMS`
+  即放行，OP 只是框架簿记）→ `leg=legacy` 判重吸收 ✓（钉钉 1 次、收件箱 1 行 `_id=23`）。
+  面板（SP970 也是 `admin:admin`）`/api/sysinbox` `total=18` 无重复 ✓。
+- appops.xml 延迟刷写：直写已成功时本包下可能暂无 `<op n="15"/>`，属正常簿记延迟，
+  不影响功能。SP970 `/data/local/tmp` 另有大量历史部署备份件
+  （smsrelay-appdata-*.tar.gz、stage181-183、rp3-7.sh 等）未清——属用户既有产物，
+  待确认后另行处理。
+
+### 版本
+
+- 1.8.7（versionCode 10807），`dist/com.sp970.smsrelay-1.8.7.apk`，
+  sha256=df2bfca5e0199769…（含 WRITE_SMS manifest 声明与 directInsert 诊断日志），
+  已 `-r` 重装至 JZ02 并完成 10086 真实短信回路验证（见上）。

@@ -11,6 +11,7 @@
     "url": "http://127.0.0.1:8899",
     "token": "jz02-relay-2026"
   },
+  "mirrorInbox": "on",
   "keepalive": {
     "enabled": true,
     "intervalSec": 10,

@@ -40,6 +40,8 @@ public class TestReceiver extends BroadcastReceiver {
             Log.i("SmsRelay", "test event injected: " + e.body + " evId=" + evId
                     + " targets=" + r.targets.size());
             ctx.startService(new Intent(ctx, RelayService.class));
+            // 注入测试也镜像进收件箱（JZ02 验证收件箱链路用；默认短信 App 存在时不动作）
+            InboxMirror.storeAsync(ctx, e.peer, e.body, e.ts);
         } catch (Throwable t) {
             Log.e("SmsRelay", "test inject failed", t);
         }

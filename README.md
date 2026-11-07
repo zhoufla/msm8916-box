@@ -678,3 +678,16 @@ JZ02 = UFI / richal / juzhen，msm8916，Android 4.4.4 `KTU84P test-keys`，
 `ro.secure` 设为 0 让 adb shell 直接是 root。**禁止**把
 `tools/relay-helper/init.qcom.post_boot.sh`（SP970 完整脚本）或
 `tools/hwfix/quadcore` 用到 JZ02 上。
+
+JZ02 特有功能（app 1.8.7 起）：**本 app 即默认短信 App**——设备没有任何原装短信应用，
+`content://sms/inbox` 永远真空，因此 app 通过 4.4 默认短信 App 四组件（SMS_DELIVER /
+WAP_PUSH_DELIVER / SENDTO / RESPOND_VIA_MESSAGE）+ `mirrorInbox: auto/on/off`
+把收到的短信写进 provider：成默认后走 app 直写（OP 自愈 + manifest `WRITE_SMS`），
+未成默认时走 root 代理，面板「系统收件箱」「补收」均可用。入站双播
+（SMS_DELIVER 点对点 + SMS_RECEIVED legacy 腿）由 Db 判重吸收，不会双发。
+默认化脚本 `tools/jz02/set-default-sms.ps1`（JZ02 无 appops CLI，OP 依赖框架
+收 SMS 时自愈）。注意这台 ROM 的坑：`content` CLI 显示 date 会被 32 位截断
+（DB 里是 Long，别信显示）、`content delete` 是空操作（删行需 root 直连
+mmssms.db）、无 `/system/xbin/sqlite3`（上游 Radio.java 的 APN 读写路径待排查）、
+provider 写需要 manifest 声明 `WRITE_SMS` + OP 两层齐全。详见
+`tools/jz02/README.md` v8/v9 两节。

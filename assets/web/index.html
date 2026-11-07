@@ -1197,7 +1197,10 @@ function loadSysInbox(){
     if(!d.ok){ $('sysList').innerHTML='<div class="empty">'+esc(d.message||d.error||'读取失败')+'</div>';
       $('sysPager').innerHTML=''; return; }
     if(!d.messages.length){
-      $('sysList').innerHTML='<div class="empty">系统收件箱是空的（或已翻过最后一页）</div>';
+      var why=d.mirror
+        ?'还没有收到短信。本设备没有默认短信 App：收到的短信会由收件箱镜像（mirrorInbox）同步写进来'
+        :'系统收件箱是空的（或已翻过最后一页）';
+      $('sysList').innerHTML='<div class="empty">'+why+'</div>';
       $('sysPager').innerHTML=''; return;
     }
     state.sysPage=d.messages;
