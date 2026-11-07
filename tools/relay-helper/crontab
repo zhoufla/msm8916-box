@@ -7,3 +7,7 @@
 # 依赖 JZ02 APK 升到 v1.8.x 提供 /api/ping + WatchdogReceiver + smsrelay-port
 */2 * * * * /system/bin/sh /system/etc/relay-helper/bin/logsnap.sh >/dev/null 2>&1
 */2 * * * * /system/bin/sh /system/etc/relay-helper/bin/watchdog-8080.sh >/dev/null 2>&1
+# JZ02 精简：回收后台缓存进程（HOME 包保留，仅清进程；am kill 只杀可回收的后台，前台/LMK 保护不受影响）
+# 分钟位取 1,6,11,…（模 5），与每 2 分钟的看门狗偶有同分钟并发，am kill 秒级返回、互不干扰。
+# 逐项论证见 tools/jz02/README.md「v7 运行态精简」。
+1,6,11,16,21,26,31,36,41,46,51,56 * * * * /system/bin/am kill com.android.launcher3 com.android.systemui com.android.keychain com.android.onetimeinitializer com.android.settings com.android.providers.contacts com.android.providers.media com.android.defcontainer >/dev/null 2>&1

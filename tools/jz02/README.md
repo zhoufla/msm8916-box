@@ -563,3 +563,143 @@ reboot`，或直接删除 `/system/etc/install-recovery.sh`。
 > 所以挂起**与数据开关无关**，更像是首次切卡时 APN 迁移 / modem 首次注册 /
 > 框架开机状态机的一次性事件。若再次出现，断电重插即可；
 > `persist.jz02.sim.slot=3` 存于 `/data/property`，重启仍选外置卡。
+
+
+## v7：运行态精简（内存 + 负载，2026-11-07）
+
+> 目标：释放内存、降低 load。**不动 boot 分区、不删任何 APK/包**，全部是
+> 「二进制改名 + crontab 清理」级别的可逆操作，配合基带挂起前科做了逐项健康闸门
+> （每步之后核对 `subsys2/modem` ONLINE 且 `crash_count` 不涨、`com.android.phone`
+> / smsrelay / 8080 / 8899 存活）。
+
+### 做了什么
+
+1. **二进制改名（原样备份在 `/system/etc/jz02-slim-backup/`，`adb remount` 后操作）**：
+
+   | /system/bin 下改名为 `.disabled` | 服务 | 处置理由 |
+   |---|---|---|
+   | `syssn` | init 反复拉起（实测崩溃循环，每秒级 fork+退出+log） | 纯浪费 |
+   | `loc_launcher` `xtwifi-inet-agent` `xtwifi-client` `lowi-server` `location-mq` | `init.svc.loc_launcher` + 5 个 gps 进程 | 强化档已断其外联，进程仍白跑 |
+   | `mm-qcamera-daemon`（服务 `qcamerasvr`） | 相机 HAL daemon | 无摄像头场景 |
+   | `audiod` | 音频 HAL daemon | 无音频场景 |
+
+   `reboot` 后验证：上述服务/进程不再出现、`init.svc` 直接置空（exec 失败即放弃，
+   **无重试火焰**）、`mm-pp-daemon`/`surfaceflinger` 原样保留、开机流程完整。
+
+2. **crontab 新增「后台缓存进程回收」**（`tools/relay-helper/crontab` 同步版本化，
+   分钟位取 1,6,11,…（模 5），与每 2 分钟的 watchdog-8080 看门狗偶有同分钟并发，互不干扰）：
+   每错开 1,6,11,… 分钟 `am kill` launcher3/systemui/keychain/onetimeinitializer/
+   settings/providers.contacts/providers.media/defcontainer。
+   注意 **包一个没删**：launcher3 仍是 HOME（v6 已证删 HOME 会卡 bootanim）；
+   `am kill` 只杀可回收后台（DIRT 上开机早段 fg 级的会被留在原地，随空闲轮次逐批回收），
+   LMK 语义不受影响。
+
+### 明确不碰（真机验证后的结论）
+
+- **display 栈（`surfaceflinger`/SystemUI/`mm-pp-daemon`)不能停**：单独 `stop ppd`
+  安全（system_server 稳）；但 `stop surfaceflinger` 后 system_server 会在随后
+  的框架重启里**拿不到 display 服务而永久卡死**（AMS 不接受 `am`，只能 reboot）。
+  context：后台杀 systemui 触发过一次 system_server 软重启 → 加上 SF 已停就 wedge。
+  结论：SF 必须随开机常驻，`mdss_*` D 态内核线程是 load 的地板价。
+- **联系人/媒体 provider、`com.android.phone`、SMS/RIL 链**：smsrelay 的
+  `content://sms` 广播/发送、补收、保活全部依赖，保留。
+- WiFi（hostapd/wpa_supplicant/dnsmasq）、relay-helper、两个内置 busybox：面板功能依赖，保留。
+
+### 实测数据
+
+| 指标 | 精简前（原态稳态） | 精简后 |
+|---|---|---|
+| MemFree（即时） | 20.6MB | 开机冷启动后 31MB；`am kill` 后 49~99MB（缓存进程杀净时冲到 99.6MB） |
+| AnonPages | 86MB | 80MB（开机早期读数，还会随 crond 轮次下降） |
+| load（15min） | 5.15 恒定不落 | **2.14**（开机后 ~7min 读数仍在收敛；syssn 崩溃循环与 GPS 5 进程的常驻 fork/线程消失） |
+| modem SSR | ONLINE / crash=0 | 全程 ONLINE / crash=0（含一次 system_server 软重启周期、NV 写入与数次重启） |
+| 面板/保活 | - | `panel.running=true`，keepalive 全 ping OK |
+
+### 回滚
+
+> 原「设备侧副本」`/system/etc/jz02-slim-backup/` 已按用户要求清出 #system 分区，
+> 8 个原版二进制移至仓库 [`tools/jz02/slim-backup/`](slim-backup/)（md5 见下表），
+> 必要时可 `adb push` 回 `/system/bin/<原名>`。
+
+```
+adb remount
+adb push tools/jz02/slim-backup/<f> /system/bin/<f>    # 逐个还原，或：
+# for f in syssn loc_launcher xtwifi-inet-agent xtwifi-client lowi-server location-mq mm-qcamera-daemon audiod; do adb push tools/jz02/slim-backup/$f /system/bin/$f; done
+# crontab 行直接在面板「维护 → 定时任务」删除，或去掉 tools/relay-helper/crontab 里 am kill 一行再重放 deploy
+reboot
+```
+
+| 文件 | md5 |
+|---|---|
+| audiod | `d8175a0e05ae6878ecb49c39f5b235e0` |
+| loc_launcher | `299a78663a3f784cac75bc92bad897ab` |
+| location-mq | `8794e2cf545a3427bf3c1e6abb7ba836` |
+| lowi-server | `5f29e6589abd45ce89df2dd132712146` |
+| mm-qcamera-daemon | `21784821d4cbc47f79c0b244ab972d89` |
+| syssn | `013fb95e06178f69eb228ad16333343a` |
+| xtwifi-client | `8fac3dc1448508765049d28489450a9e` |
+| xtwifi-inet-agent | `c15a92f403e9448936aaf63fd95109e1` |
+
+### 备注
+
+- **adb server 不要混用**：这台机器的 JZ02 维护通道统一走 WSL `-L tcp:5039`
+  （见第十一节）。v7 当轮改用了 Windows 侧另一个 adb（miko 自带 1.0.32，隐式 5037）
+  完成 remount 与改名——后续若要跑 `deploy-jz02.py --verify-only`，先按项目惯例
+  kill 掉 5037 的 server 或重开 5039，避免三条 server 抢同一条 USB adbd 传输。
+- 开机后 MemFree 回落是因为 framework 每次冷启动都会重建缓存进程（HOME 等），
+  由 crond 轮次逐步回收；要每次开机更快回血可把 cron 行挪进 post_boot 片段（未做，
+  避免与 deploy-jz02.py 的幂等注入互相干扰）。
+
+
+<!-- jz02-sms-noservice-nv-2026-11-07 -->
+
+## v7·补充：短信发不出去（NO_SERVICE）的根因是 modem NV `Pref Service`
+
+**症状**：面板发短信回 `失败 · 无服务`（SmsManager `RESULT_ERROR_NO_SERVICE`）；
+数据域（rmnet0 / LTE 保活 ping）完全正常。
+
+**证据链（逐步、可复现）**：
+
+1. `dumpsys telephony.registry`：
+
+   ```
+   mServiceState=1 0 home CMCC CMCC 46000  Unknown LTE CSS not supported
+                        ^ 话音域 REGISTRATION_STATE=OUT_OF_SERVICE / 数据域 0=IN_SERVICE
+   ```
+
+2. radio 缓冲：`SmsDispatcher` 在客户端就因话音域非 IN_SERVICE 拒发，
+   **RIL 请求根本没发出**（`D/RIL_ImsSms sendText` 后无后续，仅两条老 quirk 日志
+   `Invalid Validity Period-1`）。
+3. modem 对 `VOICE_REGISTRATION_STATE` 的应答恒为
+   `{2, null, null, 0, …}`（SEARCHING，永不出 LAC/CID），且从不主动上报 URC。
+4. AP 侧自救全部无效：写 `preferred_network_mode`（11/1/22 各试一次 + 重启）、
+   飞行模式循环、`stop/start ril-daemon` 都不影响——每次开机，
+   `preferred_network_mode` 还会被 framework 重写回 `ro.telephony.default_network`
+   的 **11**。这台设备上制式设置属于「重启会还原」的墙头草。
+5. 用 QPST 读 modem NV：**`UMTS System → Pref Service` 出厂为 `PS`**
+   （纯数据棒默认，不发起 CS 域附着/CSFB 的 LAU），这正是 4 里所有表象的根源。
+
+**修复**：QPST（诊断口 9091）把 `Pref Service` 改为 **`CS and PS`**
+（Write to Phone；radio offline → write → online 或直接断电重插让 Android 恢复
+`rndis,adb` 枚举）→ 整机 reboot。
+
+**修复后验证（同机实测）**：
+
+```
+mServiceState=0 0 home CMCC CMCC 46000  LTE LTE ...   ← 话音域 IN_SERVICE
+VOICE_REGISTRATION_STATE {1, 33d4, 03a6cf43, 14, …}   ← REGISTERED，LAC/CID 就位（rat=LTE）
+面板 → 10086「CXLL」真发真收，钉钉转发送达
+```
+
+**结论与备忘**：
+
+- **这是 modem NV 侧配置问题，与 ROM/精简无关**；v5/v6/v7 的任何 AP 改动既不是
+  因也救不了它（文档早前记录的「SIM READY 但 OUT_OF_SERVICE」同根）。
+- modem 全程 `subsys2 ONLINE / crash_count=0`，NV 写 + 断电重插没有引发 SSR。
+- QPST offline 写入后若整机 hang、只枚举 Diag 9091（无 RNDIS/ADB）：
+  可断电重插恢复 Android USB（9091 只是 modem offline 态的透明示象；9008 才是 EDL）。
+- `preferred_network_mode` 已还原为改用前的值（读回 9）；被 framework 开机重写回 11
+  属本机原有行为，不是本次引入。
+- QPST 里 `Preferred Band`（UMTS 段）只勾了 `W-850`/`IMT 2100`——本次
+  LTE+CSFB 下话音直接注册，没暴露频段问题。若后续出现 GSM 回落类话音问题，
+  下一个排查点就是频段配置（GSM 900/1800）。
