@@ -396,3 +396,101 @@ GPT 头/分区项 CRC 有效、22 个分区逐字节未变、原始包 md5 `2fa5
 刷 v6 整包后需重新装一次 APK（APK 在 `/data/app`，不在 system 分区）：
 `adb -L tcp:5039 -s 0 install -r dist/com.sp970.smsrelay-1.7.0.apk`。
 helper 自启已固化在 system 的 post_boot 注入里，开机自动生效。
+
+
+<!-- jz02-panel-fix-2026-11-07 -->
+
+## 十一、8080 面板可用性（2026-11-07 真机验证与修复）
+
+**症状**：`http://192.168.42.129:8080/` 打不开。主机 `192.168.42.32` 能
+ping 通设备 `192.168.42.129`，但 TCP 8080 无监听。Windows 上用
+`Invoke-WebRequest` 看到的 `502 Bad Gateway` 是**系统代理**返回的，不是设备；
+直连请用 `curl --noproxy '*' http://192.168.42.129:8080/`，或给浏览器加代理例外。
+
+**三个根因（逐层实测）**
+
+1. `pm dump com.sp970.smsrelay` 显示 `stopped=true notLaunched=true`。
+   adb 安装的包从未被启动，Android 4.4 会把 stopped 包排除在
+   `BOOT_COMPLETED` 之外，`BootReceiver` 从未触发，`RelayService` / 8080 不存在。
+   显式 `am start -n com.sp970.smsrelay/.MainActivity` 后 `stopped=false`、
+   日志 `[panel] 面板已启动，端口 8080`。
+2. 解除 stopped 后**重启仍不自启**：本机 ROM 的开机 `BOOT_COMPLETED` 不送达
+   该静态 receiver（手动 `am broadcast -a android.intent.action.BOOT_COMPLETED
+   -n com.sp970.smsrelay/.BootReceiver` 立刻能起服务）。因此改为在
+   `post_boot.snippet` 里由 init(root) 延迟 `sleep 15` 后 `am start` +
+   `am startservice` 拉起，不依赖 app 层广播。relay-helper / 5555 这条
+   init 通道在重启后一直正常。
+3. 配置模板有 bug：`helper` 被嵌在 `web` 段里，但 `AppConfig.parse()` 读的是
+   **root 层** `root.optJSONObject("helper")`；且 `channels: []` 会让
+   `load()` 回退到 `sampleJson()`，把 helper 段整个丢掉。结果维护页的
+   root 命令通道一直用代码默认值 `sp970-relay-2026`，与设备
+   `/system/etc/relay-helper/token` 的 `jz02-relay-2026` 不匹配。
+   已修正模板：helper 顶层、channels 放一个 disabled 占位。
+
+**修复后的部署流程**（`deploy-jz02.py` 现在 7 步，全程幂等）
+
+```
+python tools/jz02/deploy-jz02.py                 # 含装 APK / 预置配置 / 解除 stopped
+python tools/jz02/deploy-jz02.py --verify-only   # 含 8080 与面板 API 校验
+python tools/jz02/deploy-jz02.py --verify-only --reboot   # 验证开机自启
+```
+
+`deploy_panel()` 会在 APK 缺失时自动 `adb install -r dist/...apk`（刷 v6 整包后
+`/data/app` 被清空时也适用）；配置已含 JZ02 token 时**不覆盖**用户在面板上的
+改动，否则先备份 `.pre-jz02` 再推送。`verify_panel()` 用
+`adb forward tcp:18080 tcp:8080` + Basic auth 从宿主机验证
+`/api/status`、`/api/maint/helper`、`/api/health`，不依赖设备网络可达性。
+
+**实测结果**
+
+| 检查 | 结果 |
+|---|---|
+| `/`（无认证） | `401` + `WWW-Authenticate: Basic realm="msm8916-box"`，浏览器弹登录框 |
+| `/`（admin:admin） | `200` |
+| `/api/status` | `device=jz02`、`panel.running=true`、port 8080 |
+| `/api/maint/helper` | `uid=0(root)`、`alive=true`、`token=jz02-relay-2026` |
+| `/api/health` | `healthy=true`、`issues=[]`（panel8080 / helper / smsrelay / ril / simReady / adbd5555 全 true） |
+| 开机自启 | 重启后 post_boot 拉起，8080 自动 LISTEN |
+
+默认凭据 `admin / admin`（`config/smsrelay.conf.jz02.example` 的 `web` 段）。
+面板只绑 `0.0.0.0:8080`，厂商面板占用的 80 在 v6 已清空，不冲突。
+
+
+<!-- jz02-panel-fix-addendum-2026-11-07 -->
+
+### 补充：root 看门狗、校验口径与重启瞬态
+
+**root 层看门狗**：`tools/relay-helper/bin/panel-watchdog.sh` 由 crond 每 5 分钟
+（`0,5,10,... * * * *`）以 root 调用，只在 `netstat` 没有 `:8080 ` 时执行
+`am start` + `am startservice`。覆盖 JZ02 378MB 内存下 LMK 回收 app 进程的情况，
+日志在 `/data/local/tmp/relay-helper/panel-watchdog.log`。开机自启仍由
+post_boot 片段（延迟 15s）负责，两者互不冲突。
+
+**`/api/health` 只作 INFO**：该接口会经 helper 跑一段 shell 体检，在 378MB
+内存设备上偶发 20s 超时；`memOk` 判据是裸 `MemFree > 20000`（不扣可回收
+cache，本机常年 false），开机窗口内 SIM 还会短暂 `ABSENT`。这些都不代表
+面板不可用。`deploy-jz02.py` 的硬断言是：8080 监听、包非 stopped、配置含
+JZ02 token、`/api/status` running、helper root 通道 uid=0 且 token 匹配。
+`--reboot` 分支的校验结果现在也会正确反映到退出码。
+
+**重启后的 USB RNDIS 重新枚举瞬态（重要）**：设备刚重启的 1~2 分钟内 USB
+gadget 会重新枚举，`rndis0` 可能短暂没有 `192.168.42.129/24`，
+`sys.usb.config` 从 `rndis,none,adb` 收敛到 `rndis,adb`，期间 USB adb 也会
+短暂掉线重连。此时主机侧 `curl` 超时、浏览器打不开，设备侧
+`wget http://192.168.42.129:8080/` 报 `Network unreachable`，但
+`wget http://127.0.0.1:8080/` 一直正常返回 401。**不是面板故障**，等 USB
+重新枚举完成即可。排查顺序：设备 `netstat -ltn | grep 8080` → 设备
+`127.0.0.1:8080` → 设备 `ip addr | grep rndis0` → 主机 `curl --noproxy '*'`。
+
+**Windows 侧**：若系统配了代理，`Invoke-WebRequest` / 浏览器访问
+`192.168.42.129:8080` 会看到 `502 Bad Gateway`（代理返回，不是设备）。
+给该地址加代理例外，或用 `curl --noproxy '*' -u admin:admin ...` 验证。
+
+**最终实测（2026-11-07）**：`deploy-jz02.py --verify-only --reboot` 重启后
+校验「全绿」exit=0；主机直连 `http://192.168.42.129:8080/` 连续 3 次
+`HTTP 200`（约 10ms，首页 `<title>MSM8916 Box 控制台</title>`），
+无认证返回 `401 + WWW-Authenticate: Basic`。SIM 开机约 1 分钟后从 ABSENT
+恢复到 `READY / 中国电信`。
+
+**分工**：`BAK-analysis/work/live/verify-hardened.py` 管刷包落地（新增面板
+状态 INFO 项）；`tools/jz02/deploy-jz02.py --verify-only` 管面板完整可用性。

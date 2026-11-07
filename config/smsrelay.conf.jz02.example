@@ -1,1 +1,33 @@
-{"device":"jz02","web":{"enabled":true,"port":8080,"user":"admin","pass":"admin","helper":{"enabled":true,"port":8899,"token":"jz02-relay-2026"}},"keepalive":{"enabled":true,"intervalSec":10,"target":"223.5.5.5","iface":"rmnet0","restoreMs":2000000000},"channels":[]}
+{
+  "device": "jz02",
+  "web": {
+    "enabled": true,
+    "port": 8080,
+    "user": "admin",
+    "pass": "admin"
+  },
+  "helper": {
+    "enabled": true,
+    "url": "http://127.0.0.1:8899",
+    "token": "jz02-relay-2026"
+  },
+  "keepalive": {
+    "enabled": true,
+    "intervalSec": 10,
+    "target": "223.5.5.5",
+    "iface": "rmnet0",
+    "restoreMs": 2000000000
+  },
+  "rulesDefault": "all",
+  "rules": [],
+  "channels": [
+    {
+      "name": "占位-未启用",
+      "type": "webhook",
+      "url": "http://127.0.0.1:9/sms",
+      "token": "",
+      "template": "{peer}\n{body}\n设备：{device}",
+      "enabled": false
+    }
+  ]
+}

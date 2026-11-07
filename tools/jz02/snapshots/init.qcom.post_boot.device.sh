@@ -13,6 +13,17 @@ setprop ctl.restart adbd
 # 通用 root 命令通道：busybox httpd 只听 127.0.0.1:8899，CGI 由 init(root) 执行。
 # busybox 由 deploy-jz02.py 从 tools/jz02/busybox 推到 /system/xbin/busybox。
 /system/xbin/busybox setsid /system/bin/sh /system/etc/relay-helper/start.sh >/dev/null 2>&1 </dev/null &
+# --- smsrelay panel autostart BEGIN ---
+# 8080 面板：本机 ROM 的 BOOT_COMPLETED 不送达第三方静态 receiver
+# （实测 stopped=false 仍不自启；手动 am broadcast -n .../.BootReceiver 可起服务）。
+# 因此改由 init(root) 的 post_boot 通道延迟拉起，不依赖 app 的 BootReceiver。
+# am start 同时让「首次安装 / 刷整包重装后」的包脱离 stopped 状态；
+# MainActivity.onStart 会 startService(RelayService)，再补一次 startservice 兜底。
+( sleep 15
+  /system/bin/am start -n com.sp970.smsrelay/.MainActivity >/dev/null 2>&1
+  /system/bin/am startservice -n com.sp970.smsrelay/.RelayService >/dev/null 2>&1
+) >/dev/null 2>&1 </dev/null &
+# --- smsrelay panel autostart END ---
 # --- relay-helper autostart END ---
 # Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
 #
