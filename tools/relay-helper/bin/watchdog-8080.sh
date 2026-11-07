@@ -15,7 +15,9 @@
 #
 # 分级处置（每轮 2 分钟）：
 #   fail=1   发 WATCHDOG_TICK 广播 → WatchdogReceiver 探活并重建 WebPanel
-#   fail=2/3 force-stop 清掉卡死进程 + 广播
+#   fail=2/3 force-stop 清掉卡死进程 → am start 拉起 Activity（清 stopped 状态）
+#            → 广播；注意普通广播默认不投递给 force-stop 后的包，必须带
+#            --include-stopped-packages，且 am start 后才能恢复服务
 #   fail>=4  reboot（本机唯一可靠的整机复位手段）
 # 临时禁用自动 reboot：touch /sdcard/Download/smsrelay-no-reboot
 #
@@ -73,13 +75,18 @@ echo "=== watchdog uptime=$UP wall=$WALL port=$PORT fail=$f ===" >> "$LOG"
 case "$f" in
   1)
     echo "  action: broadcast WATCHDOG_TICK" >> "$LOG"
-    $AM broadcast -a "$ACTION" -n "$RECV" >> "$LOG" 2>&1
+    $AM broadcast --include-stopped-packages -a "$ACTION" -n "$RECV" >> "$LOG" 2>&1
     ;;
   2|3)
-    echo "  action: force-stop + broadcast" >> "$LOG"
+    echo "  action: force-stop + am start + broadcast" >> "$LOG"
     $AM force-stop "$PKG" >> "$LOG" 2>&1
     sleep 1
-    $AM broadcast -a "$ACTION" -n "$RECV" >> "$LOG" 2>&1
+    # force-stop 会把包置为 stopped，普通广播默认带 FLAG_EXCLUDE_STOPPED_PACKAGES
+    # 投递不到静态接收器。am start 是清掉 stopped 状态的可靠动作，
+    # MainActivity.onCreate 会 startService(RelayService) 把面板带起来。
+    $AM start -n "$PKG/.MainActivity" >> "$LOG" 2>&1
+    sleep 1
+    $AM broadcast --include-stopped-packages -a "$ACTION" -n "$RECV" >> "$LOG" 2>&1
     ;;
   *)
     if [ -e "$NOREBOOT" ]; then
