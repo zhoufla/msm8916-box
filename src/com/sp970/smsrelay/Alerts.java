@@ -1,6 +1,7 @@
 package com.sp970.smsrelay;
 
 import android.content.Context;
+import android.os.SystemClock;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -113,7 +114,7 @@ public final class Alerts {
             Long s = lastSent.get(key);
             sent = s == null ? 0L : s.longValue();
         }
-        long now = System.currentTimeMillis();
+        long now = SystemClock.elapsedRealtime();
         long remindMs = Math.max(1, cfg.alertRemindH) * 3600L * 1000L;
         String act = AlertLogic.decide(was, sent, now, bad, remindMs);
         if ("fire".equals(act) || "remind".equals(act)) {

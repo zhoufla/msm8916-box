@@ -1,6 +1,6 @@
 # msm8916-box 完整功能测试计划
 
-> 基线：v1.8.0（versionCode 10800）· 五期功能+六项体验+验证码模板+DDNS 多记录构建 `dist/com.sp970.smsrelay-1.8.0.apk`
+> 基线：v1.8.1（versionCode 10801）· v1.8.0 五期功能 + P0 日志取证落盘 / 面板探活自愈，构建 `dist/com.sp970.smsrelay-1.8.1.apk`
 > 设备 SP970-B @ `192.168.10.196:8080`（admin:admin）
 > 编制：2026-11-07　状态标记：☑ 已通过　☐ 待测　➖ 不适用/可选
 
@@ -194,3 +194,37 @@ curl -u admin:admin http://192.168.10.196:8080/api/ddns
 - 告警状态（firing/lastSent）存进程内存，重启清零 → 重启后首个周期会重推一次在途异常。
 - DDNS 蜂窝 IPv4 属 CGNAT 不上报；仅 station 模式报 v4 出口 IP，蜂窝优先报 v6。
 - Update 比对 versionCode，manifest 版本更低不会自降级。
+
+## 9. v1.8.1 P0 稳定性专项（2026-11-07 事故后补）
+
+> 背景：面板卡死后 watchdog 15 分钟未拉起、无硬件看门狗、拔电后日志全丢。
+> 验证改动：`Logs` 落盘 + `logsnap.sh` 快照 + `/api/ping` 探活 + helper 分级自愈 +
+> 闹钟/计时改用单调时钟。跑本组前先确认 v1.8.1 APK 与 helper 脚本**都已部署**。
+
+| # | 用例 | 判据 | 状态 |
+|---|---|---|---|
+| WD-01 | 探活端点 | `curl -s .../api/ping` 回 `ok`（免认证），`/api/status` 仍要求 Basic | ☐ |
+| WD-02 | 端口文件 | `cat /sdcard/Download/smsrelay-port` 等于实际监听端口 | ☐ |
+| WD-03 | 日志落盘 | 触发一条日志后 `smsrelay-run.log` 出现对应行且带 `up=` | ☐ |
+| WD-04 | 断电取证 | 拔电重启后上一份 `smsrelay-lastkmsg.log` / `smsrelay-run.log` 仍可读 | ☐ |
+| WD-05 | 假在线自愈 | 进程存活但端口不响应时，≤5 分钟内 8080 恢复（App 内第一道） | ☐ |
+| WD-06 | 进程被杀自愈 | `am force-stop com.sp970.smsrelay` 后 ≤4 分钟内 helper 广播拉起、面板恢复 | ☐ |
+| WD-07 | reboot 开关 | `touch /sdcard/Download/smsrelay-no-reboot` 后连续失败只记日志不重启 | ☐ |
+| WD-08 | 单调时钟 | 墙钟往前跳 1 小时，5 分钟闹钟仍按时触发、保活 `uptimeMs` 不跳变 | ☐ |
+| WD-09 | 无 SIGPIPE 噪音 | crond 跑 ≥30 分钟，`/data/tombstones` 无新增（脚本全程不用管道） | ☐ |
+| WD-10 | 24h 挂机 | PSS 无持续增长（<基线+20%）、`queue.failed=0`、`health.log` 正常增长；本次是运行约 6h 后出事，短时回归覆盖不到 | ☐ |
+
+```sh
+# 面板侧
+curl -s http://192.168.10.196:8080/api/ping
+curl -s -u admin:admin http://192.168.10.196:8080/api/logs?limit=20
+
+# 设备侧（走面板「维护 → 命令框」，root）
+cat /sdcard/Download/smsrelay-port
+ls -la /sdcard/Download/smsrelay-*.log
+tail -n 30 /sdcard/Download/smsrelay-watchdog.log
+cat /data/local/tmp/relay-helper/wd8080.state
+```
+
+- **WD-06 会短暂中断面板**，安排在夜间或确认无在途短信时做；WD-04 需要真实拔电。
+- 仍然救不了「内核完全冻结」：真硬件看门狗需内核 `CONFIG_MSM_WATCHDOG` bite 或外部断电装置。

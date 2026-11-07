@@ -8,6 +8,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.os.IBinder;
 import android.os.PowerManager;
+import android.os.SystemClock;
 
 import java.util.List;
 
@@ -192,8 +193,10 @@ public class RelayService extends Service {
             i.setAction(ACTION_TICK);
             PendingIntent pi = PendingIntent.getBroadcast(this, 1, i,
                     PendingIntent.FLAG_UPDATE_CURRENT);
-            am.setRepeating(AlarmManager.RTC_WAKEUP,
-                    System.currentTimeMillis() + WATCHDOG_MS, WATCHDOG_MS, pi);
+            // 用单调时钟：本机 RTC 断电归零、开机后 NITZ 校时会把墙钟往前跳约 34 小时，
+            // RTC_WAKEUP 的绝对时间基准在这种跳变下不可靠（2026-11-07 事故诱因之一）。
+            am.setRepeating(AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    SystemClock.elapsedRealtime() + WATCHDOG_MS, WATCHDOG_MS, pi);
         } catch (Throwable ignored) {
         }
     }

@@ -2,6 +2,7 @@ package com.sp970.smsrelay;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.SystemClock;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -41,7 +42,7 @@ public final class Ddns {
         try {
             AppConfig cfg = AppConfig.load(app);
             if (!cfg.ddnsEnabled) return;
-            long now = System.currentTimeMillis();
+            long now = SystemClock.elapsedRealtime();
             if (lastTick > 0 && now - lastTick < cfg.ddnsIntervalMin * 60000L) return;
             lastTick = now;
             updateNow(app);
