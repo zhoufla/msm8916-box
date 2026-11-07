@@ -5,6 +5,7 @@ import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.os.Binder;
 import android.os.IBinder;
+import android.os.SystemClock;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -139,7 +140,7 @@ public final class MobileKeepalive {
             o.put("fails", fails);
             o.put("lastError", lastError);
             o.put("uptimeMs", running && startedAt > 0
-                    ? System.currentTimeMillis() - startedAt : 0);
+                    ? SystemClock.elapsedRealtime() - startedAt : 0);
         } catch (Throwable ignored) {
         }
         return o;
@@ -195,7 +196,7 @@ public final class MobileKeepalive {
     // ---------- 线程主体 ----------
 
     private static void loop(Context app) {
-        startedAt = System.currentTimeMillis();
+        startedAt = SystemClock.elapsedRealtime();
         boolean wasEnabled = false;
         Logs.add(TAG, "保活线程启动");
 
@@ -229,7 +230,7 @@ public final class MobileKeepalive {
 
             if (!wasEnabled) {
                 wasEnabled = true;
-                startedAt = System.currentTimeMillis();
+                startedAt = SystemClock.elapsedRealtime();
                 fails = 0;
                 pings = 0;
                 oks = 0;
@@ -241,14 +242,14 @@ public final class MobileKeepalive {
                         + " 过期=" + cfg.kaRestoreMs + "ms");
             }
 
-            long begin = System.currentTimeMillis();
+            long begin = SystemClock.elapsedRealtime();
             try {
                 if (!restoreSet) restoreSet = applyRestore(app, cfg.kaRestoreMs);
 
                 boolean connected = hipriConnected(app);
                 if (!connected) {
                     int rc = startFeature();
-                    long now = System.currentTimeMillis();
+                    long now = SystemClock.elapsedRealtime();
                     if (rc == 0 || rc == 1) {
                         if (lastReqRc != rc) {
                             Logs.add(TAG, "HIPRI 请求已接受（返回 " + rc + "，等待链路建立）");
@@ -282,7 +283,7 @@ public final class MobileKeepalive {
             }
 
             phase = hipri ? "运行" : "重连中";
-            long used = System.currentTimeMillis() - begin;
+            long used = SystemClock.elapsedRealtime() - begin;
             long wait = Math.max(1000, cfg.kaIntervalSec * 1000L - used);
             pause(wait);
         }
@@ -355,7 +356,7 @@ public final class MobileKeepalive {
         }
 
         // 连续失败主动重建一次 HIPRI（参考脚本的 ifdown/ifup，这里换成停/启特性）
-        long now = System.currentTimeMillis();
+        long now = SystemClock.elapsedRealtime();
         if (fails >= 6 && now - lastRecoverAt > RECOVER_COOLDOWN_MS) {
             lastRecoverAt = now;
             int f = fails;

@@ -1,5 +1,6 @@
 package com.sp970.smsrelay;
 
+import android.os.SystemClock;
 import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -249,8 +250,8 @@ public final class Net {
         Thread t1 = reader(p.getInputStream(), so);
         Thread t2 = reader(p.getErrorStream(), se);
         Out o = new Out();
-        long deadline = System.currentTimeMillis() + 10 * 60 * 1000;
-        while (System.currentTimeMillis() < deadline) {
+        long deadline = SystemClock.elapsedRealtime() + 10 * 60 * 1000;
+        while (SystemClock.elapsedRealtime() < deadline) {
             try {
                 o.code = p.exitValue();
                 break;

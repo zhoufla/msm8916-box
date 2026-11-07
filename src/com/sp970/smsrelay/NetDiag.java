@@ -1,6 +1,7 @@
 package com.sp970.smsrelay;
 
 import android.content.Context;
+import android.os.SystemClock;
 
 import org.json.JSONObject;
 
@@ -21,7 +22,7 @@ public final class NetDiag {
 
     public static JSONObject run(Context ctx, String kind, String target, String iface, int count) {
         JSONObject o = new JSONObject();
-        long t0 = System.currentTimeMillis();
+        long t0 = SystemClock.elapsedRealtime();
         try {
             kind = kind == null ? "" : kind.trim();
             if (count < 1) count = 4;
@@ -76,12 +77,12 @@ public final class NetDiag {
             o.put("ok", r.error.length() == 0);
             o.put("kind", kind);
             o.put("exit", r.exit);
-            o.put("elapsedMs", System.currentTimeMillis() - t0);
+            o.put("elapsedMs", SystemClock.elapsedRealtime() - t0);
             o.put("text", r.out);
             if (r.error.length() > 0) o.put("error", r.error);
             if ("tcpdump".equals(kind)) parseDump(o, r.out);
             o.put("message", r.error.length() > 0 ? r.error
-                    : ("完成，耗时 " + (System.currentTimeMillis() - t0) + " ms"));
+                    : ("完成，耗时 " + (SystemClock.elapsedRealtime() - t0) + " ms"));
         } catch (Throwable t) {
             put(o, "ok", false);
             put(o, "message", str(t));

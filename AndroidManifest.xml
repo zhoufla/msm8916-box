@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.sp970.smsrelay"
-    android:versionCode="10800"
-    android:versionName="1.8.0">
+    android:versionCode="10801"
+    android:versionName="1.8.1">
 
     <uses-sdk android:minSdkVersion="19" android:targetSdkVersion="19" />
 
@@ -62,6 +62,15 @@
         <receiver
             android:name=".AlarmReceiver"
             android:exported="false" />
+
+        <!-- 只认 com.sp970.smsrelay.WATCHDOG_TICK；供 relay-helper 的 root 看门狗唤醒 App -->
+        <receiver
+            android:name=".WatchdogReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.sp970.smsrelay.WATCHDOG_TICK" />
+            </intent-filter>
+        </receiver>
 
         <receiver
             android:name=".SendReceiver"

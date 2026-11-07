@@ -79,9 +79,13 @@ public final class WebPanel {
     /** @return 给日志看的结果描述 */
     public static String start(Context ctx) {
         synchronized (LOCK) {
-            if (instance != null) return "面板已在 " + instance.port() + " 端口运行";
+            if (instance != null) {
+                Watchdog.publishPort(instance.port());
+                return "面板已在 " + instance.port() + " 端口运行";
+            }
             AppConfig cfg = AppConfig.load(ctx);
             if (!cfg.webEnabled) {
+                Watchdog.clearPort();
                 Logs.add("panel", "配置里 web.enabled=false，面板不启动");
                 return "面板已禁用";
             }
@@ -92,6 +96,7 @@ public final class WebPanel {
                 if (h.start()) {
                     instance = new WebPanel(ctx.getApplicationContext(), h,
                             cfg.webUser, cfg.webPass, cfg.webToken, cfg.webCors);
+                    Watchdog.publishPort(h.port());
                     Logs.add("panel", "面板已启动，端口 " + h.port()
                             + (p != base ? "（" + base + " 被占用，顺延）" : ""));
                     return "面板已启动，端口 " + h.port();
@@ -140,6 +145,12 @@ public final class WebPanel {
             Http.Resp pre = Http.Resp.text(204, "text/plain", "");
             applyCors(pre, req);
             return pre;
+        }
+
+        // 免认证探活端点：只回 "ok"。App 内看门狗与 helper root 脚本靠它判断
+        // ServerSocket / accept 线程是否还真的活着（「假在线」时拿不到这个响应）。
+        if ("/api/ping".equals(req.path)) {
+            return Http.Resp.text(200, "text/plain; charset=utf-8", "ok");
         }
 
         Http.Resp r;
@@ -605,21 +616,21 @@ public final class WebPanel {
             public void stream(OutputStream out) throws Exception {
                 SSE_CONN.incrementAndGet();
                 try {
-                    long end = System.currentTimeMillis() + SSE_LIFETIME_MS;
+                    long end = SystemClock.elapsedRealtime() + SSE_LIFETIME_MS;
                     String lastKey;
                     try { lastKey = sseCmpKey(w.status(null)); }
                     catch (Throwable t) { lastKey = "{\"ok\":false}"; }
                     out.write("retry: 3000\n\n".getBytes("UTF-8"));
                     out.write(("event: status\ndata: " + w.status(null) + "\n\n").getBytes("UTF-8"));
                     out.flush();
-                    long lastWrite = System.currentTimeMillis();
-                    while (System.currentTimeMillis() < end) {
+                    long lastWrite = SystemClock.elapsedRealtime();
+                    while (SystemClock.elapsedRealtime() < end) {
                         Thread.sleep(1000);
                         if (peerGone()) break;
                         JSONObject snap;
                         try { snap = w.status(null); }
                         catch (Throwable t) { continue; }
-                        long now = System.currentTimeMillis();
+                        long now = SystemClock.elapsedRealtime();
                         String key = sseCmpKey(snap);
                         if (!key.equals(lastKey)) {
                             out.write(("event: status\ndata: " + snap + "\n\n").getBytes("UTF-8"));

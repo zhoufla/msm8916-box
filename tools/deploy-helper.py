@@ -38,6 +38,8 @@ FILES = [
     ("token", "token", 0o600),
     ("crontab", "crontab", 0o644),
     ("bin/health.sh", "bin/health.sh", 0o755),
+    ("bin/logsnap.sh", "bin/logsnap.sh", 0o755),
+    ("bin/watchdog-8080.sh", "bin/watchdog-8080.sh", 0o755),
 ]
 
 
