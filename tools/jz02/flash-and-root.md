@@ -82,3 +82,64 @@ adb -L tcp:5039 -s 0 shell "ls /system/etc/security/otacerts.zip /system/vendor/
 
 `BAK-analysis/work/live/rollback-system.bat` 是原先按 fastboot 写的回滚脚本，
 **在本机 aboot 上不可用**，仅保留作参考，勿执行。
+
+---
+
+## 芷荷 aboot（解锁 fastboot）
+
+> 用户提示：`F:\wifi\jz02\jz02刷机包以及工具\芷荷aboot.img`，
+> 「之前都是先刷了这个 aboot」。2026-11-07 实测确认这个记忆是对的。
+
+### 为什么原厂 aboot 什么命令都不认
+
+二进制对比（1MB ARM ELF，头部一致、代码区差 402,576 B、签名证书 2023→2022）：
+
+| 字符串计数 | 原厂 aboot | abootbak | 芷荷 aboot |
+|---|---|---|---|
+| `flash:` | **0** | 0 | **1** |
+| `erase:` | **0** | 0 | **1** |
+| `continue` | **0** | 0 | **1** |
+| `oem ` | **0** | 0 | **5** |
+| `reboot` | 4 | 4 | 6 |
+
+原厂 aboot 把 `flash:` / `erase:` / `boot` / `oem` / `reboot` 命令处理整个移除了，
+所以真机实测：
+
+```
+fastboot flash boot|aboot ...   -> Writing FAILED (remote: 'unknown command')
+fastboot erase / boot / continue / oem reboot / oem poweroff / reboot
+                                 -> FAILED (remote: 'unknown command')
+```
+
+新旧两版 fastboot（33.0.2 / 32.0.0）结果一致，不是客户端问题。
+`fastboot devices` 可见、`getvar max-download-size=0x10000000`、`getvar product=MSM8916`。
+
+### 能不能用 fastboot 刷芷荷 aboot
+
+**不能**——`fastboot flash aboot 芷荷aboot.img` 同样是 `unknown command`：
+当前运行的原厂 aboot 根本没有 `flash:` 处理函数，连给自己刷解锁版都做不到。
+当年「先刷芷荷 aboot」必然是走 **MiKo / 9008 EDL** 写 `aboot` 分区
+（9008 由 PBL 提供，不依赖 aboot，所以刷坏了也能救回来）。
+
+### 推荐做法：一次刷入组合包
+
+`ja02-fullbak-hardened-rooted-aboot.bin`（v4）在 v3 基础上把 `aboot` 分区换成芷荷版：
+
+- 强化档 223 项精简 + 配置净化
+- `ro.secure=0` → adb shell 直接 root、`adb remount` 可用（adb 公钥认证仍开）
+- 芷荷 aboot → `fastboot flash/erase/reboot/oem` 全部可用
+- `abootbak` **保留原厂镜像**作为回退
+
+MiKo 一次刷完，之后改 /system 走 adb、需要刷分区走 fastboot，都不用再动 MiKo。
+
+| 场景 | 包 |
+|---|---|
+| 完整方案（推荐） | `ja02-fullbak-hardened-rooted-aboot.bin` |
+| 不要解锁 aboot | `ja02-fullbak-hardened-rooted.bin`（v3） |
+| 不要 root | `ja02-fullbak-hardened.bin` |
+| 回滚原厂 | `F:\wifi\jz02\BAK\ja02-fullbak.bin` |
+
+校验值见 `F:\wifi\jz02\BAK-modified\校验和-强化档-rooted-aboot.txt`。
+
+> 刷完设备若停在 fastboot，**拔插一次 USB 或长按电源键**即可正常开机。
+> 芷荷 aboot 的签名证书与原厂不同，但 9008 EDL 不依赖 aboot，回滚始终可用。
