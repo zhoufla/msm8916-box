@@ -410,11 +410,12 @@ python tools/jz02/deploy-jz02.py --verify-only --reboot   # 验证开机自启
 
 ### 补充：root 看门狗、校验口径与重启瞬态
 
-**root 层看门狗**：`tools/relay-helper/bin/panel-watchdog.sh` 由 crond 每 5 分钟
-（`0,5,10,... * * * *`）以 root 调用，只在 `netstat` 没有 `:8080 ` 时执行
-`am start` + `am startservice`。覆盖 JZ02 378MB 内存下 LMK 回收 app 进程的情况，
-日志在 `/data/local/tmp/relay-helper/panel-watchdog.log`。开机自启仍由
-post_boot 片段（延迟 15s）负责，两者互不冲突。
+**root 层看门狗**：复用主线 `tools/relay-helper/bin/watchdog-8080.sh`，由 crond 每 2 分钟
+（`*/2 * * * *`）以 root 调用，先 HTTP 探活 `/api/ping`，分级处置（广播 --> force-stop+拉起
+-> reboot），日志由脚本自写 `/sdcard/Download/smsrelay-watchdog.log`，并新增每 2 分钟
+`logsnap.sh` 内核/日志快照（JZ02 无 pstore，断电取证用）。**依赖 JZ02 APK 升到 v1.8.x**
+（提供 `/api/ping` + `WatchdogReceiver` + `smsrelay-port`），否则探活恒失败会触发 reboot。
+开机自启仍由 post_boot 片段（延迟 15s）负责，两者互不冲突。
 
 **`/api/health` 只作 INFO**：该接口会经 helper 跑一段 shell 体检，在 378MB
 内存设备上偶发 20s 超时；`memOk` 判据是裸 `MemFree > 20000`（不扣可回收

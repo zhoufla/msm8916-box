@@ -1,7 +1,9 @@
 # relay-helper 定时任务（busybox crond，root 执行）
 # 格式：分 时 日 月 周 命令
 # 面板「维护 → 定时任务」可直接编辑本文件，保存后 30s 内自动重载。
-# 默认只做无害的体检落盘；需要定时重启热点/补收时再加行。
+# 默认：每日体检 + 每 2 分钟日志快照 + 每 2 分钟 8080 面板自愈；需要定时重启热点/补收时再加行。
 0 4 * * * /system/bin/sh /system/etc/relay-helper/bin/health.sh >> /sdcard/Download/smsrelay-health.log 2>&1
-# JZ02 8080 面板看门狗（root，每 5 分钟；日志在 /data/local/tmp）
-0,5,10,15,20,25,30,35,40,45,50,55 * * * * /system/bin/sh /system/etc/relay-helper/bin/panel-watchdog.sh >> /data/local/tmp/relay-helper/panel-watchdog.log 2>&1
+# JZ02 复用主线 8080 面板看门狗（root，每 2 分钟；日志由脚本自写 smsrelay-watchdog.log）
+# 依赖 JZ02 APK 升到 v1.8.x 提供 /api/ping + WatchdogReceiver + smsrelay-port
+*/2 * * * * /system/bin/sh /system/etc/relay-helper/bin/logsnap.sh >/dev/null 2>&1
+*/2 * * * * /system/bin/sh /system/etc/relay-helper/bin/watchdog-8080.sh >/dev/null 2>&1

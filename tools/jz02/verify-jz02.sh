@@ -56,5 +56,5 @@ echo "panel_state=$(pm dump com.sp970.smsrelay 2>/dev/null | $BB grep -i 'User 0
 echo "panel_conf_token=$($BB grep -c 'jz02-relay-2026' /sdcard/smsrelay.conf 2>/dev/null)"
 echo "panel_proc=$($BB ps | $BB grep smsrelay | $BB grep -v grep | $BB head -1)"
 echo "panel_autostart=$($BB grep -c 'smsrelay panel autostart' /system/etc/init.qcom.post_boot.sh)"
-echo "panel_watchdog=$($BB ls -l /system/etc/relay-helper/bin/panel-watchdog.sh 2>/dev/null)"
+echo "panel_watchdog=$($BB ls -l /system/etc/relay-helper/bin/watchdog-8080.sh 2>/dev/null)"
 echo "=== END ==="

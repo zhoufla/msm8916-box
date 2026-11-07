@@ -52,7 +52,8 @@ FILES = [
     ("ping.txt", "ping.txt", 0o644),
     ("crontab", "crontab", 0o644),
     ("bin/health.sh", "bin/health.sh", 0o755),
-    ("bin/panel-watchdog.sh", "bin/panel-watchdog.sh", 0o755),
+    ("bin/logsnap.sh", "bin/logsnap.sh", 0o755),
+    ("bin/watchdog-8080.sh", "bin/watchdog-8080.sh", 0o755),
 ]
 
 # --- smsrelay panel (8080) ---
