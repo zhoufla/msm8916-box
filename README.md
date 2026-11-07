@@ -337,15 +337,21 @@ WebPanel「假在线」（内部 running=true、端口不再 accept）永远不�
 |---|---|---|
 | 现场取证 | `Logs.add` 同步追加落盘 + 256KB×3 轮转，每行带 `up=` 单调秒；`bin/logsnap.sh` 每 2 分钟覆盖式留一份 dmesg + logcat 尾部（先写 .tmp 再 mv，拔电不破坏上一份） | `/sdcard/Download/smsrelay-run.log[.1-.3]`、`smsrelay-lastkmsg.log` |
 | App 内第一道 | `AlarmManager.ELAPSED_REALTIME_WAKEUP` 每 5 分钟 → `AlarmReceiver` → `Watchdog.probeAndRepair()`；探免认证 `GET /api/ping`，失败 `WebPanel.restart()` | 端口文件 `/sdcard/Download/smsrelay-port` |
-| helper 第二道 | `bin/watchdog-8080.sh` 每 2 分钟探 `/api/ping`：1 次发 `WATCHDOG_TICK` 广播 → 2/3 次 `am force-stop` + 广播 → 4 次 `reboot` | 日志 `smsrelay-watchdog.log`；`touch smsrelay-no-reboot` 可禁用自动 reboot |
+| helper 第二道 | `bin/watchdog-8080.sh` 每 2 分钟探 `/api/ping`：fail=1 发 `WATCHDOG_TICK` 广播 → fail=2/3 `am force-stop` + `am start -n …/.MainActivity` + 广播 → fail=4 `reboot` | 日志 `smsrelay-watchdog.log`；`touch smsrelay-no-reboot` 可禁用自动 reboot |
 
 - **端口文件双重作用**：面板 8080 被占用会自动顺延，helper 据此探实际端口；
   文件不存在 = 面板被有意关闭（`web.enabled=false`），helper 直接跳过，不会误 reboot。
 - 内部计时（保活、SSE、DDNS tick、告警节流、命令超时）统一 `SystemClock.elapsedRealtime()`；
   短信时间戳、`lastPingAt/lastOkAt` 等展示值和持久化 `checkedAt` 仍用墙钟。
+- **`force-stop` 后必须用带 `--include-stopped-packages` 的广播 + `am start`**：Android 3.1+
+  默认给普通广播加 `FLAG_EXCLUDE_STOPPED_PACKAGES`，被 force-stop 的包处于 stopped 状态，
+  静态 `WatchdogReceiver` 收不到；只有 `am start` 能清掉 stopped 并让 `MainActivity.onCreate`
+  重新 `startService`。实测广播 `flg=0x20` 一轮即可在 6s 内拉回面板。
 - 两个 root 脚本**全程不用管道**：`dmesg | tail` 这类写法会让上游吃 SIGPIPE，
   在 `/data/tombstones` 刷 tombstone，反而给已高负载的设备添乱。
 - helper 脚本随 `tools/deploy-helper.py` 部署；`crontab` 改动会被 start.sh 在 30s 内自动重载。
+- v1.8.1 已于 2026-11-07 在 `192.168.10.196` 真机部署，L1 `panel-e2e.sh` 72/72，
+  WD-01/02/03/05/06/07 实测通过（详见 `tools/TEST-PLAN.md` 第 9 节）。
 - 注意：这两层都救不了「内核完全冻结」——真硬件看门狗需要内核启用
   `CONFIG_MSM_WATCHDOG` bite 或外部断电装置，本版本只能保证「内核还能调度 shell」时自愈。
 

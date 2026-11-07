@@ -203,15 +203,15 @@ curl -u admin:admin http://192.168.10.196:8080/api/ddns
 
 | # | 用例 | 判据 | 状态 |
 |---|---|---|---|
-| WD-01 | 探活端点 | `curl -s .../api/ping` 回 `ok`（免认证），`/api/status` 仍要求 Basic | ☐ |
-| WD-02 | 端口文件 | `cat /sdcard/Download/smsrelay-port` 等于实际监听端口 | ☐ |
-| WD-03 | 日志落盘 | 触发一条日志后 `smsrelay-run.log` 出现对应行且带 `up=` | ☐ |
+| WD-01 | 探活端点 | `curl -s .../api/ping` 回 `ok`（免认证），`/api/status` 仍要求 Basic | ☑ |
+| WD-02 | 端口文件 | `cat /sdcard/Download/smsrelay-port` 等于实际监听端口 | ☑ |
+| WD-03 | 日志落盘 | 触发一条日志后 `smsrelay-run.log` 出现对应行且带 `up=` | ☑ |
 | WD-04 | 断电取证 | 拔电重启后上一份 `smsrelay-lastkmsg.log` / `smsrelay-run.log` 仍可读 | ☐ |
-| WD-05 | 假在线自愈 | 进程存活但端口不响应时，≤5 分钟内 8080 恢复（App 内第一道） | ☐ |
-| WD-06 | 进程被杀自愈 | `am force-stop com.sp970.smsrelay` 后 ≤4 分钟内 helper 广播拉起、面板恢复 | ☐ |
-| WD-07 | reboot 开关 | `touch /sdcard/Download/smsrelay-no-reboot` 后连续失败只记日志不重启 | ☐ |
-| WD-08 | 单调时钟 | 墙钟往前跳 1 小时，5 分钟闹钟仍按时触发、保活 `uptimeMs` 不跳变 | ☐ |
-| WD-09 | 无 SIGPIPE 噪音 | crond 跑 ≥30 分钟，`/data/tombstones` 无新增（脚本全程不用管道） | ☐ |
+| WD-05 | 假在线自愈 | 进程存活但端口不响应时，≤5 分钟内 8080 恢复（App 内第一道） | ☑ |
+| WD-06 | 进程被杀自愈 | `am force-stop com.sp970.smsrelay` 后 ≤4 分钟内 helper 广播拉起、面板恢复 | ☑ |
+| WD-07 | reboot 开关 | `touch /sdcard/Download/smsrelay-no-reboot` 后连续失败只记日志不重启 | ☑ |
+| WD-08 | 单调时钟 | 墙钟往前跳 1 小时，5 分钟闹钟仍按时触发、保活 `uptimeMs` 不跳变 | △ |
+| WD-09 | 无 SIGPIPE 噪音 | crond 跑 ≥30 分钟，`/data/tombstones` 无新增（脚本全程不用管道） | △ |
 | WD-10 | 24h 挂机 | PSS 无持续增长（<基线+20%）、`queue.failed=0`、`health.log` 正常增长；本次是运行约 6h 后出事，短时回归覆盖不到 | ☐ |
 
 ```sh
@@ -226,5 +226,28 @@ tail -n 30 /sdcard/Download/smsrelay-watchdog.log
 cat /data/local/tmp/relay-helper/wd8080.state
 ```
 
-- **WD-06 会短暂中断面板**，安排在夜间或确认无在途短信时做；WD-04 需要真实拔电。
+### 真机验证记录（2026-11-07 20:39–20:47 · 192.168.10.196 · v1.8.1 / 10801）
+
+部署走面板 root 通道从内网 HTTP 取 4 个文件、sha256 全过；新旧 APK 签名证书指纹同为
+`A7:1E:40…80:D9`，`pm install -r -d` 保留数据成功。helper 只换 `crontab` 与两个新脚本
+（`start.sh` 与仓库一致，未动）。L0 224/0、L1 `panel-e2e.sh` **72/72**。
+
+| 用例 | 实测 |
+|---|---|
+| WD-01 | `/api/ping` 200 `ok`（免认证）；`/api/status` 无认证 401、带认证 200 |
+| WD-02 | `smsrelay-port` = 8080，与 `panel.port` 一致 |
+| WD-03 | `smsrelay-run.log` 每行带 `up=`，含服务启动 / 面板启停 / 转发事件 |
+| WD-05 | `iptables -I INPUT 1 -i lo -p tcp --dport 8080 -j DROP` 造回环假在线（外部 8080 不受影响）；广播 `WATCHDOG_TICK` 后 run.log 出现「探活失败 → 面板已停止 → 面板已启动，端口 8080 → 重建结果」；删规则后 `ping_rc=0` |
+| WD-06 | `am force-stop` 后 `ping_rc=1`；手动驱动一轮脚本（fail=1）广播带 `flg=0x20`，6s 后面板恢复，未走 round2 / 人工兜底 |
+| WD-07 | 端口改 9999 + state=3 触发 fail=4，日志「reboot 被 smsrelay-no-reboot 阻止」，uptime 4554.57→4554.61 连续；测试后 guard 已删、port/state 已复原 |
+| WD-08 | `dumpsys alarm` 为 `ELAPSED_WAKEUP type 2 com.sp970.smsrelay`，`keepalive.uptimeMs` 与 App 启动时长吻合（旧版曾报 34h）；**未做墙钟跳 1h 实测** |
+| WD-09 | 部署后约 8 分钟 `/data/tombstones` 最新文件仍是 20:31（部署前），无新增；**≥30 分钟长时观察未做** |
+
+- **部署前修掉一个真 bug**（`af7f802`）：Android 3.1+ 普通广播默认排除 stopped 包，
+  `force-stop` 后只发广播唤不醒 App；补 `--include-stopped-packages` + `am start`。
+- 残留风险：`crond.log` 仍有 `time disparity of 2050 minutes` 记录，墙钟跳变仍会影响
+  busybox crond 调度（App 侧已改单调时钟，crond 侧无法改）；CMD_PRESETS 里
+  `dmesg | tail` 之类预设仍含管道，长时 WD-09 需排除其干扰。
+- **WD-04 需要真实拔电**（快照已按 2 分钟持续更新、落在 /sdcard 非易失介质）；
+  **WD-06 会短暂中断面板**，安排在夜间或确认无在途短信时做。
 - 仍然救不了「内核完全冻结」：真硬件看门狗需内核 `CONFIG_MSM_WATCHDOG` bite 或外部断电装置。
