@@ -553,9 +553,12 @@ reboot`，或直接删除 `/system/etc/install-recovery.sh`。
 本来就存在，`rmnet0` 成功拿到 `10.108.179.11/29` + 移动 DNS；面板 8080
 `HTTP 200`、helper 保持 root。
 
-> ⚠ **已知风险**：首次切到外置卡时，开机约 3 分钟后整机挂起（Windows 侧 USB
-> Composite / ADB Interface / RNDIS 仍 OK，Android 侧 adb / ping / 8080 全无响应，
-> 需断电重插）。禁用移动数据（`svc data disable` + `settings put global
-> mobile_data 0`）后连续稳定 10 分钟以上、越过原挂起时间点。不需要蜂窝数据时
-> 建议保持 `mobile_data=0`；需要时 `svc data enable` 并观察，异常断电重插即可，
-> 属性会让开机仍选在外置卡通道。
+> ⚠ **已知风险（未完全定位）**：**第一次**切到外置卡时，开机约 3 分钟后整机
+> 挂起（Windows 侧 USB Composite / ADB Interface / RNDIS 仍 OK，Android 侧
+> adb / ping / 8080 全无响应，需断电重插）。第二次冷启动后不再复现：连续稳定
+> 16 分钟以上，`mobile_data=1`、`rmnet0` 持有 `10.108.179.11/29`、默认路由
+> `via 10.108.179.12`、公网 `ping 223.5.5.5` 2/2 通（101–187ms）。
+> 注意「禁用数据后稳定」的推断已被推翻——数据后来自动恢复且设备仍稳定，
+> 所以挂起**与数据开关无关**，更像是首次切卡时 APN 迁移 / modem 首次注册 /
+> 框架开机状态机的一次性事件。若再次出现，断电重插即可；
+> `persist.jz02.sim.slot=3` 存于 `/data/property`，重启仍选外置卡。
