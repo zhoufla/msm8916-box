@@ -257,11 +257,6 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
         <div class="sep"></div>
         <div class="hint">保存后立即生效：新消息按新通道投递。设备名与面板登录信息在「维护」页统一修改，保存时一并提交。</div>
       </div>
-      <div class="card" style="margin-top:10px">
-        <h3>配置文件</h3>
-        <div id="cfgFile" class="hint">加载中…</div>
-      </div>
-
       <div class="toolbar" style="margin-top:12px">
         <button class="btn sm" onclick="loadRelay()">刷新</button>
         <button class="btn sm" onclick="injectTest()">注入测试消息</button>
@@ -1153,9 +1148,6 @@ function loadConfig(){
     $('cfgUser').value=state.cfg.web.user||'admin';
     $('cfgPass').value=state.cfg.web.pass||'admin';
     $('swWeb').className='sw'+(state.cfg.web.enabled!==false?' on':'');
-    $('cfgFile').innerHTML='配置来源：<span class="mono">'+esc(d.file)+'</span> · '+
-      (d.fileExists?'文件存在（保存会同时写文件）':'仅存在 App 内部存储')+
-      ' · 面板：'+(d.running?'运行中，端口 '+d.port:'未运行');
     renderChannels();
   });
 }
@@ -1257,7 +1249,7 @@ function saveConfig(){
       if(np&&np!==cur){
         // 换了端口，旧地址已经不通，直接给出新链接
         var host=location.hostname;
-        $('cfgFile').innerHTML='面板已切到端口 '+np+'：<a href="http://'+host+':'+np+'/">http://'+host+':'+np+'/</a>（用新地址打开）';
+        toast('面板已切到端口 '+np+'，请用新地址 http://'+host+':'+np+'/ 打开', false);
       }else{
         setTimeout(function(){ location.reload(); },1600);
       }
