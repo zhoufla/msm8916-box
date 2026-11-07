@@ -119,6 +119,8 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
 #toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
 #toast.err{border-color:rgba(248,113,113,.5);color:#ffd9d9}
 .tabs2{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+.pager{display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;margin-top:12px}
+.pager input{width:60px;text-align:center;padding:4px 6px}
 .sep{height:1px;background:var(--line);margin:12px 0}
 .hint{font-size:11.5px;color:var(--dim);line-height:1.6}
 .logline{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;color:var(--dim);
@@ -193,8 +195,14 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
     </div>
   </section>
 
-  <!-- 短信：统计 + 收件 + 发送 + 转发通道（短信功能的延伸） -->
+  <!-- 短信：三个子页签（系统收件箱 / 短信发送 / 转发配置），统计卡片共用 -->
   <section class="view" id="v-msgs">
+    <div class="tabs2" id="msgSubTabs">
+      <button class="btn sm on" id="mtInbox" onclick="msgSub('inbox')">系统收件箱</button>
+      <button class="btn sm" id="mtSend" onclick="msgSub('send')">短信发送</button>
+      <button class="btn sm" id="mtRelay" onclick="msgSub('relay')">转发配置</button>
+      <span class="hint" style="align-self:center;margin-left:4px">列表每页 20 条</span>
+    </div>
     <div class="grid g4" style="margin-bottom:10px">
       <div class="card"><h3>待发送</h3><div class="stat" id="stPending">-<small>条</small></div></div>
       <div class="card"><h3>已送达</h3><div class="stat" id="stSent">-<small>条</small></div></div>
@@ -203,45 +211,63 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
     </div>
     <div class="hint" id="msgErr" style="margin-bottom:8px"></div>
 
-    <div class="toolbar">
-      <button class="btn sm" onclick="loadMsgs()">刷新</button>
-      <button class="btn sm" onclick="importInbox()">补收系统收件箱</button>
-      <button class="btn sm" onclick="injectTest()">注入测试消息</button>
-      <button class="btn sm ghost" onclick="clearGivenUp()">清理已放弃</button>
-      <span class="hint" style="flex:1 1 200px;text-align:right">最近 50 条，含各通道投递状态</span>
-    </div>
-    <div id="msgList"><div class="empty">加载中…</div></div>
-
-    <div class="card" style="margin-top:12px">
-      <h3>发短信</h3>
-      <label class="fld"><span>接收号码</span><input id="sendTo" placeholder="10086 或 13800138000"></label>
-      <label class="fld"><span>内容</span><textarea id="sendBody" placeholder="短信内容，超长自动分片"></textarea></label>
-      <div class="row">
-        <button class="btn primary" onclick="doSend(this)">发送</button>
-        <button class="btn ghost" onclick="document.getElementById('sendBody').value=''">清空</button>
-        <span class="hint" id="sendHint"></span>
+    <!-- 子页签 1：系统收件箱（只读，看 + 单条转发 + 全量补收） -->
+    <div id="msgPaneInbox">
+      <div class="toolbar">
+        <button class="btn sm" onclick="loadSysInbox()">刷新</button>
+        <button class="btn sm" onclick="importInbox()">补收全部进转发队列</button>
+        <span class="hint" style="flex:1 1 200px;text-align:right">系统短信只读（4.4 起改动收件箱需默认短信 App）</span>
       </div>
-    </div>
-    <div class="card" style="margin-top:10px">
-      <h3>发送记录</h3>
-      <div id="outList"><div class="empty">加载中…</div></div>
+      <div id="sysList"><div class="empty">加载中…</div></div>
+      <div class="pager" id="sysPager"></div>
     </div>
 
-    <div class="card" style="margin-top:12px">
-      <h3>转发通道（收到的短信往哪里投递）</h3>
-      <div id="chList"><div class="empty">加载中…</div></div>
-      <div class="row" style="margin-top:6px">
-        <button class="btn sm" onclick="addChannel('dingtalk')">+ 钉钉</button>
-        <button class="btn sm" onclick="addChannel('webhook')">+ Webhook</button>
-        <span style="flex:1 1 auto"></span>
-        <button class="btn primary" onclick="saveConfig()">保存配置</button>
+    <!-- 子页签 2：短信发送 -->
+    <div id="msgPaneSend" style="display:none">
+      <div class="card">
+        <h3>发短信</h3>
+        <label class="fld"><span>接收号码</span><input id="sendTo" placeholder="10086 或 13800138000"></label>
+        <label class="fld"><span>内容</span><textarea id="sendBody" placeholder="短信内容，超长自动分片"></textarea></label>
+        <div class="row">
+          <button class="btn primary" onclick="doSend(this)">发送</button>
+          <button class="btn ghost" onclick="document.getElementById('sendBody').value=''">清空</button>
+          <span class="hint" id="sendHint"></span>
+        </div>
       </div>
-      <div class="sep"></div>
-      <div class="hint">保存后立即生效：新消息按新通道投递。设备名与面板登录信息在「维护」页统一修改，保存时一并提交。</div>
+      <div class="card" style="margin-top:10px">
+        <h3>发送记录</h3>
+        <div id="outList"><div class="empty">加载中…</div></div>
+        <div class="pager" id="outPager"></div>
+      </div>
     </div>
-    <div class="card" style="margin-top:10px">
-      <h3>配置文件</h3>
-      <div id="cfgFile" class="hint">加载中…</div>
+
+    <!-- 子页签 3：转发配置（转发记录 + 通道管理） -->
+    <div id="msgPaneRelay" style="display:none">
+      <div class="toolbar">
+        <button class="btn sm" onclick="loadRelay()">刷新</button>
+        <button class="btn sm" onclick="injectTest()">注入测试消息</button>
+        <button class="btn sm ghost" onclick="clearGivenUp()">清理已放弃</button>
+        <span class="hint" style="flex:1 1 200px;text-align:right">收到的短信与各通道投递状态</span>
+      </div>
+      <div id="msgList"><div class="empty">加载中…</div></div>
+      <div class="pager" id="msgPager"></div>
+
+      <div class="card" style="margin-top:12px">
+        <h3>转发通道（收到的短信往哪里投递）</h3>
+        <div id="chList"><div class="empty">加载中…</div></div>
+        <div class="row" style="margin-top:6px">
+          <button class="btn sm" onclick="addChannel('dingtalk')">+ 钉钉</button>
+          <button class="btn sm" onclick="addChannel('webhook')">+ Webhook</button>
+          <span style="flex:1 1 auto"></span>
+          <button class="btn primary" onclick="saveConfig()">保存配置</button>
+        </div>
+        <div class="sep"></div>
+        <div class="hint">保存后立即生效：新消息按新通道投递。设备名与面板登录信息在「维护」页统一修改，保存时一并提交。</div>
+      </div>
+      <div class="card" style="margin-top:10px">
+        <h3>配置文件</h3>
+        <div id="cfgFile" class="hint">加载中…</div>
+      </div>
     </div>
   </section>
 
@@ -751,7 +777,9 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
 
 <script>
 var state = {status:null, sys:null, cfg:null, cfgRaw:'', view:'overview', editIdx:-1, busy:false,
-  net:null, apns:[], apnEditId:0};
+  net:null, apns:[], apnEditId:0,
+  msgSub:'inbox', pg:{inbox:1, out:1, relay:1}, sysPage:[]};
+var PAGE_SIZE = 20;   // 短信三列表每页条数（后端另有 1~100 钳制）
 var DEF_TPL = '{peer}\n{body}\n设备：{device}';
 
 function $(id){ return document.getElementById(id); }
@@ -808,7 +836,7 @@ for(var i=0;i<navBtns.length;i++){
 }
 function loadView(v){
   if(v==='overview') loadOverview();
-  else if(v==='msgs'){ loadMsgs(); loadConfig(); }
+  else if(v==='msgs'){ loadMsgView(true); }
   else if(v==='sys'){ loadSys(); loadCpufreq(); }
   else if(v==='wifi') loadWifi();
   else if(v==='net') loadNet();
@@ -893,7 +921,7 @@ function loadOverview(){
       chips+='<span class="chip '+(c.active?'ok':'')+'">'+esc(c.name)+' · '+
         (c.type==='dingtalk'?'钉钉':'webhook')+(c.active?'':' · 停用')+'</span>';
     }
-    if(!chips) chips='<span class="hint">还没有配置通道，去「短信」页底部的「转发通道」添加</span>';
+    if(!chips) chips='<span class="hint">还没有配置通道，去「短信 → 转发配置」添加</span>';
     if(d.queue.lastError) chips+='<div class="hint" style="margin-top:8px;color:#f87171">最近错误：'+esc(d.queue.lastError)+'</div>';
     $('chChips').innerHTML=chips;
     if(!d.panel.running){
@@ -910,7 +938,48 @@ function loadOverview(){
     $('miniLogs').innerHTML=h||'<div class="empty">还没有日志</div>';
   });
 }
-/* ---------- 短信：统计 + 收件 + 发送 ---------- */
+/* ---------- 短信：三个子页签（系统收件箱 / 短信发送 / 转发配置） ---------- */
+function msgSub(which){
+  state.msgSub=which;
+  $('mtInbox').className='btn sm'+(which==='inbox'?' on':'');
+  $('mtSend').className='btn sm'+(which==='send'?' on':'');
+  $('mtRelay').className='btn sm'+(which==='relay'?' on':'');
+  $('msgPaneInbox').style.display=which==='inbox'?'':'none';
+  $('msgPaneSend').style.display=which==='send'?'':'none';
+  $('msgPaneRelay').style.display=which==='relay'?'':'none';
+  loadMsgView(true);
+}
+/** withCfg=true 进页签时重读配置；自动刷新传 false，避免覆盖没保存的通道编辑 */
+function loadMsgView(withCfg){
+  loadMsgStats();
+  if(state.msgSub==='inbox') loadSysInbox();
+  else if(state.msgSub==='send') loadOutbox();
+  else { loadRelay(); if(withCfg) loadConfig(); }
+}
+/* 通用分页条：gotoFn 是全局函数名，接收目标页码；total=-1 表示 ROM 没给总数 */
+function renderPager(id, page, total, size, gotoFn){
+  var el=$(id);
+  if(!el) return;
+  if(!total || total<0){
+    el.innerHTML = total===0 ? '<span class="hint">共 0 条</span>'
+      : '<button class="btn sm ghost" onclick="'+gotoFn+'('+(page+1)+')">下一页</button>';
+    return;
+  }
+  var pages=Math.max(1, Math.ceil(total/size));
+  if(page>pages){ gotoFn(pages); return; }
+  var h='<button class="btn sm ghost" onclick="'+gotoFn+'(1)"'+(page<=1?' disabled':'')+'>«</button>'+
+    '<button class="btn sm ghost" onclick="'+gotoFn+'('+(page-1)+')"'+(page<=1?' disabled':'')+'>上一页</button>'+
+    '<span class="hint">第 '+page+' / '+pages+' 页 · 共 '+total+' 条</span>'+
+    '<button class="btn sm ghost" onclick="'+gotoFn+'('+(page+1)+')"'+(page>=pages?' disabled':'')+'>下一页</button>'+
+    '<button class="btn sm ghost" onclick="'+gotoFn+'('+pages+')"'+(page>=pages?' disabled':'')+'>»</button>'+
+    '<input id="'+id+'Jump" placeholder="页码">'+
+    '<button class="btn sm ghost" onclick="pageJump(\''+id+'Jump\','+pages+',\''+gotoFn+'\')">跳</button>';
+  el.innerHTML=h;
+}
+function pageJump(id, pages, gotoFn){
+  var v=parseInt($(id).value,10);
+  if(v>=1&&v<=pages) gotoFn(v); else toast('页码要在 1-'+pages+' 之间', true);
+}
 function loadMsgStats(){
   api('GET','/api/status',null,function(d){
     if(!d.ok) return;
@@ -922,10 +991,13 @@ function loadMsgStats(){
       '<span style="color:#f87171">最近投递错误：'+esc(d.queue.lastError)+'</span>':'';
   });
 }
-function loadMsgs(){
-  loadMsgStats();
-  api('GET','/api/messages?limit=50',null,function(d){
-    if(!d.ok){ $('msgList').innerHTML='<div class="empty">'+esc(d.message||d.error||'读取失败')+'</div>'; return; }
+/* 转发记录（收信 + 每通道投递状态），分页 */
+function loadRelay(){
+  var p=state.pg.relay;
+  api('GET','/api/messages?page='+p+'&page_size='+PAGE_SIZE,null,function(d){
+    if(!d.ok){ $('msgList').innerHTML='<div class="empty">'+esc(d.message||d.error||'读取失败')+'</div>';
+      $('msgPager').innerHTML=''; return; }
+    if(!d.messages.length && p>1){ state.pg.relay=1; return loadRelay(); }
     var h='';
     for(var i=0;i<d.messages.length;i++){
       var m=d.messages[i], chs='';
@@ -948,23 +1020,25 @@ function loadMsgs(){
         '</div></div>';
     }
     $('msgList').innerHTML=h||'<div class="empty">还没有收到短信</div>';
+    renderPager('msgPager', d.page||p, d.total, d.page_size||PAGE_SIZE, 'gotoRelay');
   });
 }
+function gotoRelay(p){ state.pg.relay=p; loadRelay(); }
 function delMsg(id){
   if(!confirm('删除短信 #'+id+' ？连同它的各通道投递记录一起删，不可恢复')) return;
   api('POST','/api/messages/delete',{id:id},function(d){
-    toast(d.message||d.error||'已删除', !d.ok); loadMsgs(); loadOverview();
+    toast(d.message||d.error||'已删除', !d.ok); loadRelay(); loadOverview();
   });
 }
 function clearGivenUp(){
   if(!confirm('清掉所有「已放弃」的投递记录？对应短信若已无其他投递会一并删除')) return;
   api('POST','/api/messages/delete',{scope:'givenup'},function(d){
-    toast(d.message||d.error||'已清理', !d.ok); loadMsgs(); loadOverview();
+    toast(d.message||d.error||'已清理', !d.ok); loadRelay(); loadOverview();
   });
 }
 function retryMsg(id){
   api('POST','/api/messages/retry',{id:id},function(d){
-    toast(d.ok?d.message:(d.message||d.error||'失败'), !d.ok); loadMsgs();
+    toast(d.ok?d.message:(d.message||d.error||'失败'), !d.ok); loadRelay();
   });
 }
 function copyText(t){
@@ -977,12 +1051,48 @@ function copyText(t){
 }
 function importInbox(){
   api('POST','/api/inbox/import',{},function(d){
-    toast(d.ok?d.message:(d.message||d.error||'失败'), !d.ok); loadMsgs();
+    toast(d.ok?d.message:(d.message||d.error||'失败'), !d.ok);
+    loadMsgStats(); loadSysInbox();
   });
 }
 function injectTest(){
   api('POST','/api/messages/test',{peer:'10086',body:'面板测试消息 '+new Date().toLocaleTimeString()},
-    function(d){ toast(d.ok?d.message:(d.message||d.error||'失败'), !d.ok); setTimeout(loadMsgs,800); });
+    function(d){ toast(d.ok?d.message:(d.message||d.error||'失败'), !d.ok);
+      setTimeout(function(){ state.pg.relay=1; loadRelay(); loadMsgStats(); },800); });
+}
+
+/* ---------- 系统收件箱子页签：只读列表 + 已转发标记 + 单条转发 ---------- */
+function loadSysInbox(){
+  var p=state.pg.inbox;
+  api('GET','/api/sysinbox?page='+p+'&page_size='+PAGE_SIZE,null,function(d){
+    if(!d.ok){ $('sysList').innerHTML='<div class="empty">'+esc(d.message||d.error||'读取失败')+'</div>';
+      $('sysPager').innerHTML=''; return; }
+    if(!d.messages.length){
+      $('sysList').innerHTML='<div class="empty">系统收件箱是空的（或已翻过最后一页）</div>';
+      $('sysPager').innerHTML=''; return;
+    }
+    state.sysPage=d.messages;
+    var h='';
+    for(var i=0;i<d.messages.length;i++){
+      var m=d.messages[i];
+      h+='<div class="msg"><div class="top"><span class="peer">'+esc(m.peer||'(未知)')+'</span>'+
+        '<span><span class="chip '+(m.relayed?'ok':'wait')+'">'+(m.relayed?'已转发':'未转发')+'</span> '+
+        '<span class="mono">'+esc(m.iso||'-')+'</span></span></div>'+
+        '<div class="body">'+esc(m.body)+'</div>'+
+        '<div class="acts"><button class="btn sm ghost" onclick="fwdSys('+i+')">转发</button></div>'+
+        '</div>';
+    }
+    $('sysList').innerHTML=h;
+    renderPager('sysPager', d.page||p, d.total, d.page_size||PAGE_SIZE, 'gotoSysInbox');
+  });
+}
+function gotoSysInbox(p){ state.pg.inbox=p; loadSysInbox(); }
+function fwdSys(i){
+  var m=(state.sysPage||[])[i]; if(!m) return;
+  api('POST','/api/sysinbox/forward',{peer:m.peer,body:m.body,ts:m.ts},function(d){
+    toast(d.ok?d.message:(d.message||d.error||'转发失败'), !d.ok);
+    if(d.ok){ loadMsgStats(); loadSysInbox(); }
+  });
 }
 
 /* ---------- 发送 ---------- */
@@ -994,12 +1104,15 @@ function doSend(btn){
     if(btn) btn.disabled=false;
     toast(d.ok?d.message:(d.message||d.error||'发送失败'), !d.ok);
     if(d.ok){ $('sendBody').value=''; $('sendHint').textContent='已提交 #'+d.id;
-      setTimeout(loadOutbox,1200); }
+      state.pg.out=1; setTimeout(loadOutbox,1200); }
   });
 }
 function loadOutbox(){
-  api('GET','/api/outbox?limit=20',null,function(d){
-    if(!d.ok) return;
+  var p=state.pg.out;
+  api('GET','/api/outbox?page='+p+'&page_size='+PAGE_SIZE,null,function(d){
+    if(!d.ok){ $('outList').innerHTML='<div class="empty">'+esc(d.message||d.error||'读取失败')+'</div>';
+      $('outPager').innerHTML=''; return; }
+    if(!d.messages.length && p>1){ state.pg.out=1; return loadOutbox(); }
     var h='';
     for(var i=0;i<d.messages.length;i++){
       var m=d.messages[i];
@@ -1014,8 +1127,10 @@ function loadOutbox(){
         '</div>';
     }
     $('outList').innerHTML=h||'<div class="empty">还没有发送记录</div>';
+    renderPager('outPager', d.page||p, d.total, d.page_size||PAGE_SIZE, 'gotoOutbox');
   });
 }
+function gotoOutbox(p){ state.pg.out=p; loadOutbox(); }
 function delOut(id){
   if(!confirm('删除发件记录 #'+id+' ？（只删记录，已发出的短信收不回来）')) return;
   api('POST','/api/outbox/delete',{id:id},function(d){
@@ -1971,11 +2086,10 @@ function doFactoryReset(btn){
 
 /* ---------- 启动 ---------- */
 loadOverview();
-loadOutbox();
 setInterval(function(){
   if(document.hidden) return;
   if(state.view==='overview') loadOverview();
-  else if(state.view==='msgs') loadMsgs();
+  else if(state.view==='msgs') loadMsgView(false);
   else if(state.view==='wifi') loadWifi();
   else if(state.view==='net') loadNet();
 }, 6000);

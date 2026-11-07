@@ -103,14 +103,22 @@ public final class Db extends SQLiteOpenHelper {
 
     /** 同号码同年内容、时间相差不超过窗口期，视为同一条。 */
     private long findNearDuplicate(SmsEvent e) {
+        return nearDuplicateId(e.peer, e.body, e.ts);
+    }
+
+    /**
+     * 面板用：判断某条短信（号码+内容+时间）是否已经在转发队列里。
+     * 系统收件箱据此标「已转发」，单条转发据此防重——判定口径与入库判重完全一致。
+     */
+    public long nearDuplicateId(String peer, String body, long ts) {
         Cursor c = null;
         try {
             c = getReadableDatabase().rawQuery(
                     "SELECT id FROM ev WHERE peer=? AND body=? AND ts BETWEEN ? AND ? " +
                             "ORDER BY id LIMIT 1",
-                    new String[]{nz(e.peer), nz(e.body),
-                            String.valueOf(e.ts - DUP_WINDOW_MS),
-                            String.valueOf(e.ts + DUP_WINDOW_MS)});
+                    new String[]{nz(peer), nz(body),
+                            String.valueOf(ts - DUP_WINDOW_MS),
+                            String.valueOf(ts + DUP_WINDOW_MS)});
             if (c.moveToFirst()) return c.getLong(0);
         } catch (Throwable ignored) {
         } finally {
@@ -259,6 +267,11 @@ public final class Db extends SQLiteOpenHelper {
         return count("SELECT COUNT(*) FROM ev");
     }
 
+    /** 面板分页用：发件记录总数。 */
+    public int countOut() {
+        return count("SELECT COUNT(*) FROM out");
+    }
+
     private int count(String sql) {
         Cursor c = null;
         try {
@@ -286,11 +299,17 @@ public final class Db extends SQLiteOpenHelper {
 
     /** 面板用：最近的收信 + 每个通道的投递状态。 */
     public JSONArray recentJson(int limit) {
+        return recentJson(limit, 0);
+    }
+
+    /** 分页：offset 从 0 起；limit/offset 由调用方钳制（WebPanel 侧 size 1~100）。 */
+    public JSONArray recentJson(int limit, int offset) {
         JSONArray arr = new JSONArray();
         Cursor c = null;
         try {
             c = getReadableDatabase().rawQuery(
-                    "SELECT id,ts,peer,body,code FROM ev ORDER BY id DESC LIMIT " + limit, null);
+                    "SELECT id,ts,peer,body,code FROM ev ORDER BY id DESC LIMIT " + limit
+                            + " OFFSET " + offset, null);
             while (c.moveToNext()) {
                 JSONObject o = new JSONObject();
                 long id = c.getLong(0);
@@ -362,12 +381,17 @@ public final class Db extends SQLiteOpenHelper {
     }
 
     public JSONArray outboxJson(int limit) {
+        return outboxJson(limit, 0);
+    }
+
+    /** 分页：offset 从 0 起；limit/offset 由调用方钳制。 */
+    public JSONArray outboxJson(int limit, int offset) {
         JSONArray arr = new JSONArray();
         Cursor c = null;
         try {
             c = getReadableDatabase().rawQuery(
                     "SELECT id,ts,peer,body,parts,status,err FROM out ORDER BY id DESC LIMIT "
-                            + limit, null);
+                            + limit + " OFFSET " + offset, null);
             while (c.moveToNext()) {
                 JSONObject o = new JSONObject();
                 long ts = c.getLong(1);
@@ -469,7 +493,8 @@ public final class Db extends SQLiteOpenHelper {
         }
     }
 
-    private static String iso(long ts) {
+    /** 时间格式化（SysInbox 复用）。 */
+    public static String iso(long ts) {
         return new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA)
                 .format(new Date(ts > 0 ? ts : System.currentTimeMillis()));
     }

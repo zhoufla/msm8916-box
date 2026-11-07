@@ -60,6 +60,7 @@ if check_ok "/api/sys" "$sy"; then
 fi
 check_ok "/api/messages" "$(get '/api/messages?limit=5')"
 check_ok "/api/outbox" "$(get '/api/outbox?limit=5')"
+check_ok "/api/sysinbox" "$(get '/api/sysinbox?page=1&page_size=5')"
 check_ok "/api/config" "$(get /api/config)"
 check_ok "/api/logs" "$(get '/api/logs?limit=10')"
 check_ok "/api/wifi" "$(get /api/wifi)"
