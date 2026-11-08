@@ -687,24 +687,30 @@ public final class Maint {
     // ---------- #22 LED 定位 ----------
 
     /**
-     * LED 定位（torch-light）。
-     * ⚠ 回退到最初版本（2026-11-07 用户要求，两次验证后仍不理想）：
-     * 写 7、toolbox sleep 0.3、不动 trigger。已知行为：亮=闪烁 / 灭=常亮 / 闪8下只见4下。
-     * 出光模型结论（A/B 实测）：trigger 挂载时 255 才是稳定全亮、0 会被锁存成常亮、
-     * 7 是低占空比闪烁；摘 trigger 全灭。但闪 8 下需逐相位切 trigger，用户实测仍不理想，
-     * 暂回退第一版，后续再研究（可能是 PMIC 手电通道的硬件特性）。
+     * LED 定位。
+     * SP970：torch-light，保持最初版本（写 7、toolbox sleep 0.3、不动 trigger）。
+     *         已知行为：亮=闪烁 / 灭=常亮 / 闪8下只见4下。
+     * JZ02：没有 torch-light，内核 gpio-leds 导出 red/green/blue（power/wlan/wan），
+     *        red 默认挂 timer trigger；先摘 trigger 再控制，动作结束还原原状态。
      */
     public static JSONObject led(Context ctx, String action) {
         JSONObject o = new JSONObject();
         try {
-            String node = "/sys/class/leds/torch-light/brightness";
+            if (!"on".equals(action) && !"off".equals(action) && !"blink".equals(action)) {
+                throw new IllegalArgumentException("action 只能是 on / off / blink");
+            }
             String cmd;
-            if ("on".equals(action)) cmd = "echo 7 > " + node;
-            else if ("off".equals(action)) cmd = "echo 0 > " + node;
-            else if ("blink".equals(action)) {
-                cmd = "(for i in 1 2 3 4 5 6 7 8; do echo 7 > " + node
-                        + "; sleep 0.3; echo 0 > " + node + "; sleep 0.3; done) >/dev/null 2>&1 & echo SENT";
-            } else throw new IllegalArgumentException("action 只能是 on / off / blink");
+            if (new File("/sys/class/leds/green/brightness").exists()) {
+                cmd = gpioLed(action);
+            } else {
+                String node = "/sys/class/leds/torch-light/brightness";
+                if ("on".equals(action)) cmd = "echo 7 > " + node;
+                else if ("off".equals(action)) cmd = "echo 0 > " + node;
+                else {
+                    cmd = "(for i in 1 2 3 4 5 6 7 8; do echo 7 > " + node
+                            + "; sleep 0.3; echo 0 > " + node + "; sleep 0.3; done) >/dev/null 2>&1 & echo SENT";
+                }
+            }
             Root.Result r = Root.exec(ctx, cmd);
             o.put("ok", r.ok());
             o.put("out", r.out);
@@ -714,6 +720,38 @@ public final class Maint {
             put(o, "message", str(t));
         }
         return o;
+    }
+
+    /**
+     * JZ02 的 gpio-leds：red=power / green=wlan / blue=wan。
+     * 先保存每颗灯的 brightness 和 trigger，摘掉 trigger 再控制；
+     * on 亮 15 秒、off 灭 5 秒、blink 闪 8 下，结束后都还原，避免把电源灯/WLAN 灯永久改掉。
+     */
+    private static String gpioLed(String action) {
+        String D = "/data/local/tmp/led-locate";
+        StringBuilder s = new StringBuilder();
+        s.append("D=").append(D).append("; ").append(BB).append(" mkdir -p $D; ");
+        s.append("for L in red green blue; do N=/sys/class/leds/$L; ");
+        s.append("[ -e $N/brightness ] || continue; ");
+        s.append("cat $N/brightness > $D/$L.br 2>/dev/null; ");
+        s.append("T=$(").append(BB).append(" sed -n 's/.*\\[\\([^]]*\\)\\].*/\\1/p' $N/trigger 2>/dev/null); ");
+        s.append("[ -n \"$T\" ] || T=none; echo $T > $D/$L.tr; echo none > $N/trigger; done; ");
+        s.append("(");
+        if ("on".equals(action)) {
+            s.append("for L in red green blue; do echo 255 > /sys/class/leds/$L/brightness 2>/dev/null; done; sleep 15; ");
+        } else if ("off".equals(action)) {
+            s.append("for L in red green blue; do echo 0 > /sys/class/leds/$L/brightness 2>/dev/null; done; sleep 5; ");
+        } else {
+            s.append("for i in 1 2 3 4 5 6 7 8; do ");
+            s.append("for L in red green blue; do echo 255 > /sys/class/leds/$L/brightness 2>/dev/null; done; sleep 0.3; ");
+            s.append("for L in red green blue; do echo 0 > /sys/class/leds/$L/brightness 2>/dev/null; done; sleep 0.3; done; ");
+        }
+        s.append("for L in red green blue; do N=/sys/class/leds/$L; ");
+        s.append("[ -e $N/brightness ] || continue; ");
+        s.append("echo $(cat $D/$L.br 2>/dev/null) > $N/brightness 2>/dev/null; ");
+        s.append("T=$(cat $D/$L.tr 2>/dev/null); [ -n \"$T\" ] && echo $T > $N/trigger 2>/dev/null; done");
+        s.append(") >/dev/null 2>&1 & echo SENT");
+        return s.toString();
     }
 
     // ---------- 小工具 ----------

@@ -17,8 +17,7 @@ import java.util.List;
  * Root.exec → 设备侧 relay-helper。app 仍是普通 uid 10075。
  *
  * 真机实测（SP970-B / 4.4.4）拿到的落地方式：
- *  - APN 读：sqlite3 -separator '|' 直读 telephony.db，比解析 content query 的
- *    "Row: N k=v, k=v" 稳（apn type 里本身带逗号，按逗号切会切坏）
+ *  - APN 读：content query（JZ02 无 sqlite3 CLI；type 里本身带逗号，按 ", key=" 切不会切坏）
  *  - APN 写：content insert/update/delete，走 provider 才会发变更通知，改完立刻生效
  *  - 首选 APN：content update --uri content://telephony/carriers/preferapn --bind apn_id:i:<id>
  *    （实测当前指向 _id=1602 China Mobile / cmnet）
@@ -31,8 +30,6 @@ import java.util.List;
 public final class Radio {
 
     private static final String BB = "/system/xbin/busybox";
-    private static final String DB =
-            "/data/data/com.android.providers.telephony/databases/telephony.db";
     private static final String CARRIERS = "content://telephony/carriers";
     private static final String PREFER = "content://telephony/carriers/preferapn";
 
@@ -140,6 +137,25 @@ public final class Radio {
         return o;
     }
 
+    /** "Row: N _id=1, name=..., type=default,supl, ..." → map；NULL 归一成空串。 */
+    private static java.util.Map<String, String> contentFields(String line) {
+        java.util.Map<String, String> m = new java.util.HashMap<String, String>();
+        String s = line;
+        int row = s.indexOf("Row: ");
+        if (row >= 0) {
+            int sp = s.indexOf(' ', row + 5);
+            if (sp > 0) s = s.substring(sp + 1);
+        }
+        String[] parts = s.split(", (?=(?:" + APN_KEY_ALT + ")=)");
+        for (int i = 0; i < parts.length; i++) {
+            int eq = parts[i].indexOf('=');
+            if (eq <= 0) continue;
+            String v = parts[i].substring(eq + 1);
+            m.put(parts[i].substring(0, eq), "NULL".equals(v) ? "" : v);
+        }
+        return m;
+    }
+
     /** 制式代号 → 人话。原厂用的是 22（TD/GSM/WCDMA 大组合）+ 后缀 1。 */
     public static String modeLabel(int mode) {
         switch (mode) {
@@ -164,14 +180,19 @@ public final class Radio {
             "_id,name,apn,numeric,mcc,mnc,type,user,password,proxy,port,mmsc," +
             "current,preferred,protocol,roaming_protocol,carrier_enabled";
 
+    /** content query 的 "key=value, key=value" 切分；只认 APN_COLS 里的键，type 里的逗号不会被切坏。 */
+    private static final String APN_KEY_ALT =
+            "_id|name|apn|numeric|mcc|mnc|type|user|password|proxy|port|mmsc|" +
+            "current|preferred|protocol|roaming_protocol|carrier_enabled";
+
     public static JSONObject apns(Context ctx) {
         JSONObject o = new JSONObject();
         try {
             String numeric = simNumeric(ctx);
-            String where = numeric.length() > 0 ? " where numeric='" + numeric + "'" : "";
-            String cmd = "sqlite3 -separator '|' " + DB +
-                    " \"select " + APN_COLS + " from carriers" + where +
-                    " order by carrier_enabled desc, _id limit 200\" 2>&1";
+            String where = numeric.length() > 0 ? " --where \"numeric='" + numeric + "'\"" : "";
+            // JZ02 没有 sqlite3 CLI，改走 content provider（写路径本来就走 provider）。
+            String cmd = "content query --uri " + CARRIERS + " --projection " + APN_COLS +
+                    where + " 2>&1";
             Root.Result r = Root.exec(ctx, cmd);
             if (!r.ok() && r.error.length() > 0) throw new IllegalStateException(r.error);
 
@@ -179,23 +200,23 @@ public final class Radio {
             List<String> lines = splitLines(r.out);
             for (int i = 0; i < lines.size(); i++) {
                 String line = lines.get(i).trim();
-                if (line.length() == 0) continue;
-                String[] f = line.split("\\|", -1);
-                if (f.length < 8) continue;
+                if (!line.startsWith("Row: ")) continue;
+                java.util.Map<String, String> f = contentFields(line);
+                if (f.get("_id") == null) continue;
                 JSONObject a = new JSONObject();
-                a.put("id", num(f[0]));
-                a.put("name", f[1]);
-                a.put("apn", f[2]);
-                a.put("numeric", f[3]);
-                a.put("mcc", f[4]);
-                a.put("mnc", f[5]);
-                a.put("type", f[6]);
-                a.put("user", f[7]);
-                a.put("password", f.length > 8 ? f[8] : "");
-                a.put("current", num(f.length > 12 ? f[12] : "0"));
-                a.put("preferred", num(f.length > 13 ? f[13] : "0"));
-                a.put("protocol", f.length > 14 ? f[14] : "");
-                a.put("enabled", !"0".equals(f.length > 16 ? f[16] : "1"));
+                a.put("id", num(f.get("_id")));
+                a.put("name", nvl(f.get("name")));
+                a.put("apn", nvl(f.get("apn")));
+                a.put("numeric", nvl(f.get("numeric")));
+                a.put("mcc", nvl(f.get("mcc")));
+                a.put("mnc", nvl(f.get("mnc")));
+                a.put("type", nvl(f.get("type")));
+                a.put("user", nvl(f.get("user")));
+                a.put("password", nvl(f.get("password")));
+                a.put("current", num(f.get("current")));
+                a.put("preferred", num(f.get("preferred")));
+                a.put("protocol", nvl(f.get("protocol")));
+                a.put("enabled", !"0".equals(nvl(f.get("carrier_enabled"))));
                 arr.put(a);
             }
             o.put("ok", true);
@@ -650,10 +671,11 @@ public final class Radio {
     private static long findApnId(Context ctx, String name) {
         try {
             long id = 0;
-            Root.Result r = Root.exec(ctx, "sqlite3 " + DB +
-                    " \"select max(_id) from carriers where name='" + name.replace("'", "''") + "'\"");
-            String s = r.out.trim();
-            if (s.matches("[0-9]+")) id = Long.parseLong(s);
+            String safe = name.replace("'", "''");
+            Root.Result r = Root.exec(ctx, "content query --uri " + CARRIERS +
+                    " --projection _id --where \"name='" + safe + "'\" 2>/dev/null");
+            List<String> lines = splitLines(r.out);
+            for (int i = 0; i < lines.size(); i++) id = Math.max(id, idOf(lines.get(i)));
             return id;
         } catch (Throwable t) {
             return 0;
@@ -662,10 +684,13 @@ public final class Radio {
 
     private static long countApn(Context ctx, long id) {
         try {
-            Root.Result r = Root.exec(ctx,
-                    "sqlite3 " + DB + " \"select count(*) from carriers where _id=" + id + "\"");
-            String s = r.out.trim();
-            return s.matches("[0-9]+") ? Long.parseLong(s) : -1;
+            Root.Result r = Root.exec(ctx, "content query --uri " + CARRIERS +
+                    " --projection _id --where \"_id=" + id + "\" 2>/dev/null");
+            if (r.exit != 0) return -1;
+            long n = 0;
+            List<String> lines = splitLines(r.out);
+            for (int i = 0; i < lines.size(); i++) if (lines.get(i).trim().startsWith("Row: ")) n++;
+            return n;
         } catch (Throwable t) {
             return -1;
         }

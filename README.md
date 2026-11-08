@@ -504,7 +504,7 @@ sh tools/smoke-test.sh 192.168.42.129:8080 admin:admin 10086
 脚本会逐项打面板接口（无凭据 401、首页、status/sys/messages/outbox/config/logs/wifi、
 注入测试消息、补收），再打维护通道（uid=0、health、体检、命令框、日志、文件、crontab、
 日志打包、备份、LED），再打移动网络（radio 状态/APN 列表/流量/SIM 锁/attach 诊断/
-ping/wifi 高级/APN 增删演练），共 30 项，最后汇总通过/失败项。重启/关机/制式写入/
+ping/wifi 高级/APN 增删演练），共 31 项，最后汇总通过/失败项。重启/关机/制式写入/
 数据开关/首选 APN 切换/恢复出厂不进自检，需人工在面板二次确认。
 
 ## 真机验证记录（SP970-B / 4.4.4 / 2026-11-06）
@@ -625,7 +625,7 @@ adb shell am broadcast -a com.sp970.smsrelay.TEST --ez importinbox true
 
 ### B2 落地补充（2026-11-06 深夜真机验证）
 
-- **APN**：读走 `sqlite3 -separator`，写走 `content insert/update/delete`（provider 发变更
+- **APN**：读走 `content query`（JZ02 无 sqlite3 CLI，type 里的逗号按 ", key=" 切），写走 `content insert/update/delete`（provider 发变更
   通知，不用重启 phone）；首选切换是 `content update --uri .../preferapn --bind apn_id:i:<id>`
   + `svc data disable/enable` 重连。真机演练：新增 ZZ_SMOKE → 删除，首选 1602↔1604 往返。
 - **ICCID 带 f 填充位**：这台 ROM 读出的 ICCID 是 `898600682226f0488598`（BCD 填充），
@@ -697,7 +697,7 @@ WAP_PUSH_DELIVER / SENDTO / RESPOND_VIA_MESSAGE）+ `mirrorInbox: auto/on/off`
 默认化脚本 `tools/jz02/set-default-sms.ps1`（JZ02 无 appops CLI，OP 依赖框架
 收 SMS 时自愈）。注意这台 ROM 的坑：`content` CLI 显示 date 会被 32 位截断
 （DB 里是 Long，别信显示）、`content delete` 是空操作（删行需 root 直连
-mmssms.db）、无 `/system/xbin/sqlite3`（上游 Radio.java 的 APN 读写路径待排查）、
+mmssms.db）、无 `/system/xbin/sqlite3`（APN 读写已改走 content provider，不再依赖 CLI）、
 provider 写需要 manifest 声明 `WRITE_SMS` + OP 两层齐全。详见
 `tools/jz02/README.md` v8/v9 两节。
 
@@ -731,3 +731,20 @@ provider 写需要 manifest 声明 `WRITE_SMS` + OP 两层齐全。详见
 配置是当年系统 Settings 存的；JZ02 无屏只能走面板，必踩）。1.8.10 起连接
 成功即 `saveConfiguration()` 落盘；已装旧包的设备升级后需在面板重新连一次
 WiFi 让配置落盘。
+
+### APN 读路径（1.8.12 修复）
+
+JZ02 没有 `/system/xbin/sqlite3`，`Radio.apns()` 原先用 sqlite3 CLI 直读
+`telephony.db`，命令不存在 → 面板恒显示「共 0 条 APN」，但保存其实已经进库。
+1.8.12 起读、回读 id、删除计数全部改走 `content query`（与写路径同一条
+provider），SP970 与 JZ02 共用。网络制式下拉也会为不在列表里的当前值
+（JZ02 的 0、开机后的 11）自动补一项，不再空白。
+
+### LED 定位（JZ02 支持）
+
+SP970 走 `torch-light`（原行为不变）。JZ02 没有这个节点，内核 `gpio-leds`
+只导出 `red`（power）/`green`（wlan）/`blue`（wan），1.8.12 起 `/api/maint/led`
+按 `/sys/class/leds/green/brightness` 是否存在自动选路径：先存每颗灯的
+brightness 与 trigger 并摘掉 trigger，再执行动作（亮 15s / 灭 5s / 闪 8 下），
+结束后还原原 brightness + trigger，避免把电源灯、WLAN 灯永久改掉。
+red 默认挂 `timer` 触发，还原后由 timer 接管亮度属预期。

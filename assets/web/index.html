@@ -2350,7 +2350,16 @@ function loadNet(){
     $('simCard').innerHTML=simH;
     $('swData').className='sw'+(d.mobileData?' on':'');
     $('swRoam').className='sw'+(d.roaming?' on':'');
-    if(d.mode>=0) $('netMode').value=String(d.mode);
+    if(d.mode>=0){
+      var v=String(d.mode), sel=$('netMode'), has=false;
+      for(var oi=0;oi<sel.options.length;oi++) if(sel.options[oi].value===v) has=true;
+      if(!has){
+        var op=document.createElement('option');
+        op.value=v; op.text=(d.modeLabel||('制式 '+v))+'（当前）';
+        sel.add(op,0);
+      }
+      sel.value=v;
+    }
     var t=d.traffic||{};
     var since=(t.sinceRx===undefined||t.sinceRx<0)?'未清零':
       ('↑'+fmtBytes(t.sinceTx)+' ↓'+fmtBytes(t.sinceRx)+' · '+(Number(t.sinceSec)||0)+' s');

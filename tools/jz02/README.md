@@ -509,6 +509,15 @@ JZ02 有一个 3 选 1 的 SIM 硬件开关，内核 `leds-gpio` 导出
 `android.led.sim.switch` 广播触发它；精简删掉面板后，`sp_sim_slot` 三个命名空间
 全为 `null`，开机也没有主动切卡流程。
 
+### LED 定位
+
+同一批 `leds-gpio` 还导出 `red`（power）/`green`（wlan）/`blue`（wan），没有
+SP970 的 `torch-light`。1.8.12 起面板「LED 定位」在 JZ02 上控制这三颗灯：
+先保存 brightness + trigger 并摘 trigger，动作结束后还原（`on` 15s / `off` 5s /
+`blink` 8 下），不会永久改掉电源灯和 WLAN 灯。真机 `/api/maint/led` 三种动作
+返回 `SENT`，状态均还原。
+
+
 ### 不要用广播热切
 
 ```sh
@@ -854,12 +863,13 @@ SP970 不受影响——它的 Mms 是默认短信 App，收到短信会照常�
 修复一个原有 bug：keysCount 用 `wc -l` 对**无结尾换行**的 authorized_keys 文件
 恒报 0，改为 `busybox awk 'END{print NR}'`，实测 1 ✓。
 
-### ⚠ sqlite3 缺失 —— 上游 Radio.java 的 APN 读写在 JZ02 需后续排查
+### sqlite3 缺失 —— APN 读写已改走 content provider（2026-11-08）
 
-JZ02 精简掉了 `/system/xbin/sqlite3`（也没有 `/system/bin/sqlite3`）。上游用
-外部 sqlite3 CLI 读 telephony 库做 APN 读写的代码路径在 JZ02 上静默失效。
-收件箱镜像没有依赖它（直连 `SQLiteDatabase` / provider API），但如果后续要
-动 APN 相关功能，先解决 DB 读取通道。
+JZ02 精简掉了 `/system/xbin/sqlite3`（也没有 `/system/bin/sqlite3`），上游
+`Radio.java` 原先用外部 sqlite3 CLI 读 telephony 库，导致面板 APN 恒显示
+「共 0 条」。现改为 `content query` 读、`content insert/update/delete` 写，
+与首选 APN 同一条 provider 通道；`findApnId` / `countApn` 也一并去掉 CLI 依赖。
+真机实测：China Mobile / cmnet（_id=2685）可正常列出，新增后能回读 id 并出现在列表。
 
 ### 验证工具
 
