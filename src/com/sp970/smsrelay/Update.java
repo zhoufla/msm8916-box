@@ -222,7 +222,11 @@ public final class Update {
                 apkBrowser = a.optString("browser_download_url", "");
                 size = a.optLong("size", 0);
             } else if (name.startsWith("latest")) {
-                jsonAsset = a;
+                // 双机型 Release 挂 latest-sp970.json / latest-jz02.json / latest.json 三个；
+                // sha256 必须取本机型的，否则装机校验必挂。后者出现时覆盖先拿到的。
+                if (jsonAsset == null || name.equals("latest-" + modelTag() + ".json")) {
+                    jsonAsset = a;
+                }
             }
         }
         if (apkId == 0) throw new IllegalStateException("这个 Release 没挂 .apk 资产");
