@@ -435,7 +435,7 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
     </div>
   </section>
 
-  <!-- 蜂窝网络：B2 换卡救砖（APN / 制式 / 数据 / SIM 锁 / 流量 / 诊断） -->
+  <!-- 蜂窝网络：B2 换卡救砖（APN / 数据 / SIM 锁 / 流量 / 诊断） -->
   <section class="view" id="v-net">
     <div class="grid g2">
       <div class="card">
@@ -455,25 +455,6 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
         <h3>SIM 卡</h3>
         <div id="simCard" class="hint">读取中…</div>
         <div class="hint" style="margin-top:8px">这台按双卡（dsds）编译：槽位状态来自 <code>gsm.sim.state</code>，插了卡才有 ICCID/IMSI 读数。没有内置卡/第二卡座时槽 2 会一直显示 ABSENT，属正常。</div>
-      </div>
-
-      <div class="card">
-        <h3>网络制式</h3>
-        <label class="fld"><span>首选网络类型</span>
-          <select id="netMode">
-            <option value="9">GSM/WCDMA/LTE 自动（推荐）</option>
-            <option value="8">仅 LTE（4G）</option>
-            <option value="3">GSM/WCDMA 自动</option>
-            <option value="1">仅 GSM（2G）</option>
-            <option value="2">仅 WCDMA（3G）</option>
-            <option value="22">TD/GSM/WCDMA 全制式（原厂值）</option>
-            <option value="23">LTE/TD/CDMA/GSM/WCDMA</option>
-          </select></label>
-        <div class="row">
-          <button class="btn sm primary" onclick="applyMode(false)">写入</button>
-          <button class="btn sm danger" onclick="applyMode(true)">写入并重启</button>
-        </div>
-        <div class="hint" style="margin-top:8px">4.4 的 Phone 对象在开机时读 preferred_network_mode，<b>写入后要重启才生效</b>；原厂值带后缀（如 <code>22,1</code>），写入时会原样保留。</div>
       </div>
 
       <div class="card" style="grid-column:1/-1">
@@ -2326,9 +2307,7 @@ function loadNet(){
   api('GET','/api/radio',null,function(d){
     if(!d.ok){ $('netState').innerHTML='<span class="chip err">读取失败</span> '+esc(d.message||d.error||''); return; }
     state.net=d;
-    var modeTxt=(d.modeRaw&&d.modeRaw!=='null')?d.modeRaw:'-';
     $('netState').innerHTML=
-      kv('制式','<span class="mono">'+esc(modeTxt)+'</span> · '+esc(d.modeLabel||''))+
       kv('网络',esc(d.netType||'-')+' · '+esc(d.operator||'-'))+
       kv('首选 APN',esc(d.preferredApn||'-')+' <span class="mono">'+
         (d.preferredApnApn?'（'+esc(d.preferredApnApn)+'）':'')+'</span>')+
@@ -2350,16 +2329,6 @@ function loadNet(){
     $('simCard').innerHTML=simH;
     $('swData').className='sw'+(d.mobileData?' on':'');
     $('swRoam').className='sw'+(d.roaming?' on':'');
-    if(d.mode>=0){
-      var v=String(d.mode), sel=$('netMode'), has=false;
-      for(var oi=0;oi<sel.options.length;oi++) if(sel.options[oi].value===v) has=true;
-      if(!has){
-        var op=document.createElement('option');
-        op.value=v; op.text=(d.modeLabel||('制式 '+v))+'（当前）';
-        sel.add(op,0);
-      }
-      sel.value=v;
-    }
     var t=d.traffic||{};
     var since=(t.sinceRx===undefined||t.sinceRx<0)?'未清零':
       ('↑'+fmtBytes(t.sinceTx)+' ↓'+fmtBytes(t.sinceRx)+' · '+(Number(t.sinceSec)||0)+' s');
@@ -2397,15 +2366,6 @@ function toggleRoam(){
   api('POST','/api/radio/roaming',{on:on},function(d){
     toast(d.message||d.error||'完成',!d.ok);
     loadNet();
-  });
-}
-function applyMode(reboot){
-  var m=Number($('netMode').value);
-  if(reboot && !confirm('写入制式 '+m+' 并立即重启？短信转发会中断约 1 分钟')) return;
-  if(!reboot && !confirm('写入制式 '+m+'？4.4 要重启才生效，现在写进去不影响正在跑的网络')) return;
-  api('POST','/api/radio/mode',{mode:m,reboot:!!reboot},function(d){
-    toast(d.message||d.error||'完成',!d.ok);
-    if(!reboot) loadNet();
   });
 }
 function loadApns(){

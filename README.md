@@ -205,7 +205,7 @@ SP970-B 的 2015 年 MPSS 基带在 LTE 空闲态（ECM-IDLE）会漏掉网络�
 转发规则（JSON 编辑 + 校验 + 匹配测试）+ 配置文件来源）· **通道**（转发通道增删改，短信转发与
 维护告警共用）·
 **系统**（硬件/系统/存储/流量/网卡）· **WiFi**（热点开关与 SSID/密码、station 开关、
-无线网卡与 MAC/IP、客户端、扫频、隐藏 SSID/关联上限/踢客户端）· **网络**（APN、网络制式、
+无线网卡与 MAC/IP、客户端、扫频、隐藏 SSID/关联上限/踢客户端）· **网络**（APN、
 数据/漫游开关、SIM 锁、流量统计、网络诊断）· **升级** · **维护**（root 命令框、体检、日志、
 备份、电源、定时任务、LED、文件下载、恢复出厂）。
 
@@ -611,7 +611,7 @@ adb shell am broadcast -a com.sp970.smsrelay.TEST --ez importinbox true
 - [x] **维护通道（B0 + B1）**：开机自启的 root helper + 静默升级 + 命令框 + 电源管理 +
   日志打包 + 一键体检 + 健康自检 + 备份恢复 + 文件下载 + 定时任务 + LED 定位
 - [x] **B2 换卡救砖**：APN 增删改/首选切换（content provider + `svc data` 重连）、
-  网络制式（写 `preferred_network_mode`，保留原厂后缀，重启生效）、移动数据/漫游、
+  移动数据/漫游、
   SIM 锁（ICCID 白名单，log/block 两档）、流量统计与清零、网络诊断（attach/ping/traceroute/
   dns/route/netstat/tcpdump）、恢复出厂（只重置自研配置，绝不删短信库）。
   WiFi 高级按真机能力收敛为：隐藏 SSID / 最大关联数 / 自动信道 / 踢客户端（hostapd_cli）——
@@ -737,8 +737,7 @@ WiFi 让配置落盘。
 JZ02 没有 `/system/xbin/sqlite3`，`Radio.apns()` 原先用 sqlite3 CLI 直读
 `telephony.db`，命令不存在 → 面板恒显示「共 0 条 APN」，但保存其实已经进库。
 1.8.12 起读、回读 id、删除计数全部改走 `content query`（与写路径同一条
-provider），SP970 与 JZ02 共用。网络制式下拉也会为不在列表里的当前值
-（JZ02 的 0、开机后的 11）自动补一项，不再空白。
+provider），SP970 与 JZ02 共用。
 
 ### LED 定位（双机型）
 

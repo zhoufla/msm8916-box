@@ -351,42 +351,6 @@ public final class Radio {
         return o;
     }
 
-    // ---------- #14 网络制式 ----------
-
-    /**
-     * 改网络制式。原厂值是 "22,1"（模式,后缀），写回时保留后缀。
-     * 4.4 的 Phone 对象在开机时读这个全局设置，运行中改不会立刻生效，所以要重启。
-     */
-    public static JSONObject setMode(Context ctx, int mode, boolean reboot) {
-        JSONObject o = new JSONObject();
-        try {
-            if (mode < 0 || mode > 23) throw new IllegalArgumentException("制式代号要在 0–23");
-            String raw = Root.exec(ctx, "settings get global preferred_network_mode").out.trim();
-            if (raw.length() == 0) raw = "null";
-            String suffix = suffixOf(raw);
-            String value = mode + (suffix.length() > 0 ? "," + suffix : "");
-            Root.Result r = Root.exec(ctx, "settings put global preferred_network_mode '" + value + "'");
-            if (!r.ok()) throw new IllegalStateException("写入失败：" + brief(r));
-            String back = Root.exec(ctx, "settings get global preferred_network_mode").out.trim();
-            o.put("ok", true);
-            o.put("modeRaw", back);
-            o.put("mode", mode);
-            o.put("modeLabel", modeLabel(mode));
-            o.put("reboot", reboot);
-            o.put("message", "已写入制式 " + mode + "（" + modeLabel(mode) + "），当前值 " + back
-                    + "；4.4 要重启才生效");
-            Logs.add("radio", "制式 → " + back);
-            if (reboot) {
-                Root.exec(ctx, "sleep 1; reboot");
-                o.put("message", "已写入制式 " + mode + "，正在重启");
-            }
-        } catch (Throwable t) {
-            put(o, "ok", false);
-            put(o, "message", str(t));
-        }
-        return o;
-    }
-
     // ---------- #15 数据 / 漫游 ----------
 
     public static JSONObject setData(Context ctx, boolean on) {

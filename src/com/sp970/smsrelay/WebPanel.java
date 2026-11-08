@@ -366,11 +366,6 @@ public final class WebPanel {
             return Http.Resp.json(Radio.apnPrefer(app, p.optLong("id", 0),
                     p.optBoolean("reconnect", true)).toString());
         }
-        if ("/api/radio/mode".equals(path)) {
-            if (!post) throw new IllegalArgumentException("需要 POST");
-            return Http.Resp.json(Radio.setMode(app, p.optInt("mode", -1),
-                    p.optBoolean("reboot", false)).toString());
-        }
         if ("/api/radio/data".equals(path)) {
             if (!post) throw new IllegalArgumentException("需要 POST");
             return Http.Resp.json(Radio.setData(app, p.optBoolean("on", true)).toString());
