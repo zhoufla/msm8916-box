@@ -207,7 +207,7 @@ public final class Maint {
 
     /**
      * 与主机侧 diag/boot-window-check.py 用同一套判据：
-     * boot_id / uptime / subsys state,crash_count / RIL 进程 / SIM / 8080 / smsrelay / MemFree。
+     * boot_id / uptime / subsys state,crash_count / RIL 进程 / SIM / 8080 / smsrelay / 可用内存。
      * 刻意不用管道（设备端管道在开机窗口里会产生 SIGPIPE tombstone 噪声）。
      */
     private static final String CHECKUP =
@@ -254,13 +254,18 @@ public final class Maint {
             String operator = first(sec.get("OPERATOR"));
             String ps = join(sec.get("PS"));
             String netstat = join(sec.get("NETSTAT"));
-            int memFree = 0;
-            for (String line : sec.get("MEMINFO") == null ? new ArrayList<String>() : sec.get("MEMINFO")) {
-                if (line.startsWith("MemFree:")) {
-                    memFree = intIn(line);
-                    break;
-                }
+            // 3.10 内核没有 MemAvailable：用 MemFree + Buffers + Cached 近似可用内存。
+            // 只看 MemFree 会把可回收的 page cache 误判成内存不足（JZ02 长期误报的根因）。
+            int memFree = 0, memBuffers = 0, memCached = 0, memAvailable = -1;
+            List<String> memLines = sec.get("MEMINFO") == null
+                    ? new ArrayList<String>() : sec.get("MEMINFO");
+            for (String line : memLines) {
+                if (line.startsWith("MemFree:")) memFree = intIn(line);
+                else if (line.startsWith("Buffers:")) memBuffers = intIn(line);
+                else if (line.startsWith("Cached:")) memCached = intIn(line);
+                else if (line.startsWith("MemAvailable:")) memAvailable = intIn(line);
             }
+            if (memAvailable < 0) memAvailable = memFree + memBuffers + memCached;
             long rx = 0, tx = 0;
             for (String line : sec.get("TRAFFIC") == null ? new ArrayList<String>() : sec.get("TRAFFIC")) {
                 if (!line.contains(":")) continue;
@@ -285,7 +290,7 @@ public final class Maint {
             // subsys0 在这颗 msm8916 上常态 OFFLINE（adsp 未加载），不算异常。
             boolean modemOnline = states.size() >= 3
                     && "ONLINE".equalsIgnoreCase(states.get(2));
-            boolean memOk = memFree > 20000;
+            boolean memOk = memAvailable > 20000;
             boolean adbd = netstat.contains(":5555 ");
 
             checks.put("helper", helper);
@@ -305,7 +310,7 @@ public final class Maint {
             if (!simReady) issues.put("SIM 不是 READY（" + sim + "）");
             if (!ssrZero) issues.put("SSR crash_count 非全 0：" + crashLines);
             if (!modemOnline) issues.put("subsys2/modem 非 ONLINE：" + states);
-            if (!memOk) issues.put("MemFree 偏低：" + memFree + " kB");
+            if (!memOk) issues.put("可用内存偏低：" + memAvailable + " kB（MemFree " + memFree + " kB）");
             if (!adbd) issues.put("5555 网络 adb 未监听");
 
             JSONArray st = new JSONArray();
@@ -325,6 +330,7 @@ public final class Maint {
             o.put("netType", netType);
             o.put("operator", operator);
             o.put("memFreeKb", memFree);
+            o.put("memAvailKb", memAvailable);
             o.put("trafficRx", rx);
             o.put("trafficTx", tx);
             o.put("psLines", countLines(ps));

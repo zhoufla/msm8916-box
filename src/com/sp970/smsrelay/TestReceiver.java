@@ -33,10 +33,10 @@ public class TestReceiver extends BroadcastReceiver {
             e.body = intent.getStringExtra("body");
             if (e.body == null || e.body.length() == 0) e.body = "测试消息 " + e.ts;
             e.code = "";
-            long evId = new Db(ctx).insertEvent(e);
+            long evId = Db.get(ctx).insertEvent(e);
             AppConfig cfg = AppConfig.load(ctx);
             Router.Result r = Router.routeAll(cfg.names());
-            new Db(ctx).ensureTargets(evId, r.targets);
+            Db.get(ctx).ensureTargets(evId, r.targets);
             Log.i("SmsRelay", "test event injected: " + e.body + " evId=" + evId
                     + " targets=" + r.targets.size());
             ctx.startService(new Intent(ctx, RelayService.class));

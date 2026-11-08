@@ -43,7 +43,7 @@ public final class SysInbox {
                 if (t != null) t.close();
             }
 
-            Db db = new Db(ctx);
+            Db db = Db.get(ctx);
             Cursor c = null;
             try {
                 c = ctx.getContentResolver().query(URI,
@@ -85,7 +85,7 @@ public final class SysInbox {
     public static JSONObject forwardOne(Context ctx, String peer, String body, long ts) {
         JSONObject o = new JSONObject();
         try {
-            Db db = new Db(ctx);
+            Db db = Db.get(ctx);
             SmsEvent e = new SmsEvent();
             e.peer = peer == null ? "" : peer;
             e.body = body == null ? "" : body;

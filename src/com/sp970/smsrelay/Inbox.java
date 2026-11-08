@@ -16,7 +16,7 @@ public final class Inbox {
         Cursor c = null;
         try {
             AppConfig cfg = AppConfig.load(ctx);
-            Db db = new Db(ctx);
+            Db db = Db.get(ctx);
             int before = db.events();
             c = ctx.getContentResolver().query(Uri.parse("content://sms/inbox"),
                     new String[]{"address", "body", "date"}, null, null, "date DESC");

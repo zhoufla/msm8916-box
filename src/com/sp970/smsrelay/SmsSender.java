@@ -30,7 +30,7 @@ public final class SmsSender {
             parts.add(text);
         }
 
-        Db db = new Db(ctx);
+        Db db = Db.get(ctx);
         long id = db.insertOut(num, text, parts.size());
         if (id <= 0) throw new Exception("写入发件记录失败");
 

@@ -53,7 +53,7 @@ public class SmsReceiver extends BroadcastReceiver {
             String leg = Telephony.Sms.Intents.SMS_DELIVER_ACTION.equals(action)
                     ? "deliver" : "legacy";
 
-            Db db = new Db(ctx);
+            Db db = Db.get(ctx);
             long id = db.insertEvent(e);
             AppConfig cfg = AppConfig.load(ctx);
             Router.Result r = Router.route(e, cfg.rules, cfg.names(), cfg.rulesDefault);

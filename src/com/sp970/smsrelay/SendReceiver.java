@@ -34,12 +34,12 @@ public class SendReceiver extends BroadcastReceiver {
 
             if (!ok) {
                 String err = errText(code);
-                new Db(ctx).markOut(id, 2, err);
+                Db.get(ctx).markOut(id, 2, err);
                 Logs.add("sms", "发送失败 id=" + id + " code=" + code + " " + err);
                 return;
             }
             if (left <= 0) {
-                new Db(ctx).markOut(id, 1, "");
+                Db.get(ctx).markOut(id, 1, "");
                 Logs.add("sms", "发送成功 id=" + id);
             }
         } catch (Throwable t) {

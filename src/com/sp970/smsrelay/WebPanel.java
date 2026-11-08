@@ -68,7 +68,7 @@ public final class WebPanel {
     private Db db() {
         if (db == null) {
             synchronized (this) {
-                if (db == null) db = new Db(app);
+                if (db == null) db = Db.get(app);
             }
         }
         return db;

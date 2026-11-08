@@ -154,7 +154,7 @@ public class MainActivity extends Activity {
         e.ts = System.currentTimeMillis();
         e.code = "";
 
-        Db db = new Db(this);
+        Db db = Db.get(this);
         long id = db.insertEvent(e);
         db.ensureTargets(id, Router.routeAll(AppConfig.load(this).names()).targets);
         startService(new Intent(this, RelayService.class));
@@ -163,7 +163,7 @@ public class MainActivity extends Activity {
     }
 
     private void updateStatus() {
-        Db db = new Db(this);
+        Db db = Db.get(this);
         AppConfig cfg = AppConfig.load(this);
         StringBuilder sb = new StringBuilder();
         sb.append("设备：").append(cfg.device).append(" / ").append(android.os.Build.MODEL)

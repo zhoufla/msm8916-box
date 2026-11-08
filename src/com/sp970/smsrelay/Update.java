@@ -435,15 +435,19 @@ public final class Update {
      *  1. relay-helper root 通道（pm install -r -d）——静默、自动拉起，正常路径
      *  2. 系统安装器 Intent（要人点确认）——helper 没部署时的兜底
      *
-     * 注意：装包会杀掉本进程，所以 pm install 与 am start 必须拼在同一条 root 命令里，
-     * helper 是独立的 root 进程，本 app 死了它照样能执行完 am start。
+     * 注意：装包会杀掉本进程，所以 pm install 与后续拉起必须拼在同一条 root 命令里，
+     * helper 是独立的 root 进程，本 app 死了它照样能执行完。
+     * 只起 RelayService，不再 am start MainActivity：MainActivity 是 720p 全屏窗口，
+     * 常驻前台会占 3 块图形 buffer（约 11MB）；Web 面板由 RelayService 内嵌提供，不依赖界面。
      * 固件 su 只放行 uid 0/2000，uid 10075 提不了权，那条分支已彻底删除；
      * 机器自带 webkey 的 /run + Digest 也不再使用。
      */
     private static String install(Context ctx, File apk) {
         String path = apk.getAbsolutePath();
-        String chain = "pm install -r -d " + path + "; sleep 2; am start -n "
-                + ctx.getPackageName() + "/.MainActivity";
+        String pkg = ctx.getPackageName();
+        String chain = "pm install -r -d " + path + "; sleep 2; am startservice -n "
+                + pkg + "/.RelayService; sleep 1; am broadcast --include-stopped-packages -a "
+                + pkg + ".WATCHDOG_TICK -n " + pkg + "/.WatchdogReceiver";
         Root.Result r = Root.exec(ctx, chain);
         if (r.ok() && r.out.toLowerCase(Locale.US).contains("success")) {
             return "已通过 relay-helper 静默安装，服务会自动重启";

@@ -40,6 +40,19 @@ public final class Db extends SQLiteOpenHelper {
                     "ts INTEGER, peer TEXT, body TEXT, parts INTEGER DEFAULT 1," +
                     "status INTEGER DEFAULT 0, err TEXT DEFAULT '')";
 
+    private static volatile Db sInstance;
+
+    /** 进程内共用一个 SQLiteOpenHelper：每个 receiver / 页面各 new 一个会各开一条连接。 */
+    public static Db get(Context c) {
+        if (sInstance == null) {
+            synchronized (Db.class) {
+                if (sInstance == null) sInstance = new Db(c.getApplicationContext());
+            }
+        }
+        return sInstance;
+    }
+
+    /** 保留构造器仅为兼容；新代码一律用 {@link #get(Context)}。 */
     public Db(Context c) {
         super(c, NAME, null, VER);
     }

@@ -134,7 +134,7 @@ public final class InboxMirror {
             if (OFF.equals(cfg.mirrorInbox)) return;
             if (AUTO.equals(cfg.mirrorInbox) && !noDefaultSmsApp(ctx)) return;
 
-            Db db = new Db(ctx);
+            Db db = Db.get(ctx);
             Cursor c = null;
             int checked = 0, wrote = 0;
             try {
