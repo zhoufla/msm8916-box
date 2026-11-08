@@ -137,6 +137,7 @@ public class MainActivity extends Activity {
         }
         AppConfig.saveJson(this, json);
         AppConfig cfg = AppConfig.load(this);
+        Hostname.sync(this, cfg.device);
         if (cfg.activeCount() == 0) {
             toast("没有启用的通道（url 需 http 开头、enabled=true）");
             return;

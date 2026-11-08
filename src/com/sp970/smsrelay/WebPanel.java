@@ -938,6 +938,8 @@ public final class WebPanel {
         // 存原始 body 的话这些保护全部白做
         AppConfig.saveEffective(app, root.toString(2));
         AppConfig now = AppConfig.load(app);
+        // 设备名同时作为系统主机名：否则路由器 DHCP/mDNS 里永远是 android-<id>
+        Hostname.sync(app, now.device);
         RelayService.wake(app);
 
         boolean needRestart = old.webPort != now.webPort

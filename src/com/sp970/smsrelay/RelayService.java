@@ -52,6 +52,8 @@ public class RelayService extends Service {
         wakelock.setReferenceCounted(false);
         startForeground(NOTI_ID, buildNotification("等待短信"));
         Logs.add("svc", "服务启动");
+        // 重启后 net.hostname 会回到 android-<id>，开机/升级/看门狗拉起时都补一次
+        Hostname.sync(this, AppConfig.load(this).device);
         SysInfo.listen(this);
         WebPanel.start(this);
         MobileKeepalive.start(this);
