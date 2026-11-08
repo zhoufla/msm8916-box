@@ -512,10 +512,13 @@ JZ02 有一个 3 选 1 的 SIM 硬件开关，内核 `leds-gpio` 导出
 ### LED 定位
 
 同一批 `leds-gpio` 还导出 `red`（power）/`green`（wlan）/`blue`（wan），没有
-SP970 的 `torch-light`。1.8.12 起面板「LED 定位」在 JZ02 上控制这三颗灯：
+SP970 的 `torch-light`。面板「LED 定位」在 JZ02 上控制这三颗灯：
 先保存 brightness + trigger 并摘 trigger，动作结束后还原（`on` 15s / `off` 5s /
 `blink` 8 下），不会永久改掉电源灯和 WLAN 灯。真机 `/api/maint/led` 三种动作
 返回 `SENT`，状态均还原。
+
+（SP970 那边的 torch-light 是另一套硬件：定位灯=电源指示灯常亮灭不掉，只能控制
+"闪"，详见主 README「LED 定位（双机型）」。）
 
 
 ### 不要用广播热切

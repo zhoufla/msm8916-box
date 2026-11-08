@@ -688,10 +688,12 @@ public final class Maint {
 
     /**
      * LED 定位。
-     * SP970：torch-light，保持最初版本（写 7、toolbox sleep 0.3、不动 trigger）。
-     *         已知行为：亮=闪烁 / 灭=常亮 / 闪8下只见4下。
-     * JZ02：没有 torch-light，内核 gpio-leds 导出 red/green/blue（power/wlan/wan），
-     *        red 默认挂 timer trigger；先摘 trigger 再控制，动作结束还原原状态。
+     * JZ02：内核 gpio-leds red/green/blue（power/wlan/wan），red 默认挂 timer；
+     *       先摘 trigger 再控制，动作结束还原原状态。
+     * SP970：单颗定位灯同时是电源指示灯，底层永远亮着，软件灭不掉（真机实测，
+     *       0/255 亮度相同）。真正可控的是"闪"：torch=7 厂商驱动会自动闪。
+     *       写之前必须保证 flashlight-trigger 挂在 flashlight 节点上——
+     *       torch-light 的 brightness_set 只是把值转发给该 trigger，摘了就失效。
      */
     public static JSONObject led(Context ctx, String action) {
         JSONObject o = new JSONObject();
@@ -704,11 +706,13 @@ public final class Maint {
                 cmd = gpioLed(action);
             } else {
                 String node = "/sys/class/leds/torch-light/brightness";
-                if ("on".equals(action)) cmd = "echo 7 > " + node;
-                else if ("off".equals(action)) cmd = "echo 0 > " + node;
+                String pre = "echo flashlight-trigger > /sys/class/leds/flashlight/trigger 2>/dev/null; ";
+                if ("on".equals(action)) cmd = pre + "echo 255 > " + node;
+                else if ("off".equals(action)) cmd = pre + "echo 0 > " + node;
                 else {
-                    cmd = "(for i in 1 2 3 4 5 6 7 8; do echo 7 > " + node
-                            + "; sleep 0.3; echo 0 > " + node + "; sleep 0.3; done) >/dev/null 2>&1 & echo SENT";
+                    // torch=7 = 硬件自动闪；闪约 5 秒后回到默认常亮
+                    cmd = "(" + pre + "echo 7 > " + node + "; sleep 5; echo 0 > " + node
+                            + ") >/dev/null 2>&1 & echo SENT";
                 }
             }
             Root.Result r = Root.exec(ctx, cmd);
@@ -720,6 +724,24 @@ public final class Maint {
             put(o, "message", str(t));
         }
         return o;
+    }
+
+    /**
+     * 开机把 SP970 的定位灯从"闪"改为常亮：厂商 flash HAL 开机 5 秒左右会往
+     * torch-light 写 7（dmesg: msm_led_torch_brightness_set value=7），灯就一直闪。
+     * 服务启动时补写 0。JZ02 没有 torch-light，直接返回。
+     */
+    public static void calmBootLed(final Context ctx) {
+        if (!new File("/sys/class/leds/torch-light/brightness").exists()) return;
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    Root.exec(ctx, "echo flashlight-trigger > /sys/class/leds/flashlight/trigger"
+                            + " 2>/dev/null; echo 0 > /sys/class/leds/torch-light/brightness");
+                } catch (Throwable ignored) {
+                }
+            }
+        }).start();
     }
 
     /**

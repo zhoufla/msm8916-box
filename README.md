@@ -740,11 +740,19 @@ JZ02 没有 `/system/xbin/sqlite3`，`Radio.apns()` 原先用 sqlite3 CLI 直读
 provider），SP970 与 JZ02 共用。网络制式下拉也会为不在列表里的当前值
 （JZ02 的 0、开机后的 11）自动补一项，不再空白。
 
-### LED 定位（JZ02 支持）
+### LED 定位（双机型）
 
-SP970 走 `torch-light`（原行为不变）。JZ02 没有这个节点，内核 `gpio-leds`
-只导出 `red`（power）/`green`（wlan）/`blue`（wan），1.8.12 起 `/api/maint/led`
-按 `/sys/class/leds/green/brightness` 是否存在自动选路径：先存每颗灯的
+SP970 走 `torch-light`：单颗定位灯同时是电源指示灯，**底层常亮、软件灭不掉**
+（真机实测 0/255 亮度相同）。可控状态只有「闪」——`torch=7` 时厂商驱动自动闪。
+注意 `torch-light` 的 brightness_set 只是把值转发给挂在 `flashlight` 节点上的
+`flashlight-trigger`，trigger 被摘掉后写 torch 无效，所以每次写入前先补挂 trigger：
+`on`=torch 255（稳定常亮）、`off`=torch 0（回到默认常亮，灭不掉）、
+`blink`=torch 7 闪约 5 秒后回 0。厂商 flash HAL 开机会写 7 导致灯一直闪
+（dmesg: `msm_led_torch_brightness_set value=7`），服务启动时 `calmBootLed()`
+补写 0 改回常亮。
+
+JZ02 没有这个节点，内核 `gpio-leds` 导出 `red`（power）/`green`（wlan）/`blue`
+（wan），按 `/sys/class/leds/green/brightness` 是否存在自动选路径：先存每颗灯的
 brightness 与 trigger 并摘掉 trigger，再执行动作（亮 15s / 灭 5s / 闪 8 下），
 结束后还原原 brightness + trigger，避免把电源灯、WLAN 灯永久改掉。
 red 默认挂 `timer` 触发，还原后由 timer 接管亮度属预期。

@@ -57,6 +57,7 @@ public class RelayService extends Service {
         SysInfo.listen(this);
         WebPanel.start(this);
         MobileKeepalive.start(this);
+        Maint.calmBootLed(this);    // SP970：把厂商 HAL 开机写 7 造成的定位灯闪烁改回常亮
         // JZ02：收件箱镜像落地后，把 app 库里已有、provider 里没有的历史消息回填一次
         InboxMirror.backfillAsync(this);
         worker = new Thread(new Runnable() {
