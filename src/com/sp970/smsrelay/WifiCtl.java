@@ -291,6 +291,9 @@ public final class WifiCtl {
                 }
                 boolean re = w.reconnect();
                 Logs.add("wifi", "reconnect → " + re + " netId=" + netId);
+                // 4.4 不会自动持久化 addNetwork 的结果，不 saveConfiguration 的话
+                // 重启后 wpa_supplicant.conf 里没有这条 network，开机必然连不上
+                try { w.saveConfiguration(); } catch (Throwable ignored) {}
 
                 // 3. 轮询等连接：SSID 对上且拿到 IP 才算成功，最长 ~18s
                 String curSsid;
