@@ -670,7 +670,9 @@ msm8916-box/
 
 ## JZ02 分支适配（本 fork）
 
-本仓库是 `msm8916-box` 的**本地 JZ02 fork**（分支 `jz02`），上游未改动。
+本仓库的 `jz02` 分支是 SP970 主线（`master`，1.8.3 基线）的延续：**两台设备
+（SP970-B 与 JZ02）都从这一条分支出包**，`master` 已于 2026-11-08 与 `jz02`
+合并（master 无独有内容，jz02 内容是其严格超集）。
 JZ02 = UFI / richal / juzhen，msm8916，Android 4.4.4 `KTU84P test-keys`，
 与 SP970 不是同一套 ROM，精简清单和部署方式都不通用。
 
@@ -698,3 +700,34 @@ WAP_PUSH_DELIVER / SENDTO / RESPOND_VIA_MESSAGE）+ `mirrorInbox: auto/on/off`
 mmssms.db）、无 `/system/xbin/sqlite3`（上游 Radio.java 的 APN 读写路径待排查）、
 provider 写需要 manifest 声明 `WRITE_SMS` + OP 两层齐全。详见
 `tools/jz02/README.md` v8/v9 两节。
+
+---
+
+## 双机型出包（1.8.11 起）
+
+同一份代码、同一个包名 `com.sp970.smsrelay`，CI 按机型矩阵同时出两个 APK
+（签名一致，互相可 `install -r` 升级）：
+
+| 产物 | 机型 | 差异 |
+|---|---|---|
+| `com.sp970.smsrelay-<版本>.apk` | SP970-B | 无内嵌机型配置，走 AppConfig 内置默认 |
+| `com.sp970.smsrelay-<版本>-jz02.apk` | JZ02 / UFI | 内嵌 `assets/model.conf`（`config/smsrelay.conf.jz02.example`：helper token、`mirrorInbox: on`、device 名） |
+
+- 差异只作用于**首次开机**（`/sdcard/smsrelay.conf` 不存在时的兜底默认），
+  两台设备的正式配置都在各自的 `/sdcard/smsrelay.conf`，不受包内默认影响；
+- 手动构建：`MODEL=jz02 sh build.sh`（或 `MODEL=sp970`，默认）；
+- 云编译（`.github/workflows/build-release.yml`）：matrix 跑 `sp970` + `jz02`，
+  汇总 job 生成 `latest.json`（平铺字段指向 sp970 包，兼容老版本的升级检查；
+  `models` 映射含两机型的完整元数据）+ 各机型 `latest-<model>.json`；
+- 设备端「检查更新」（`Update`）：按 `Build.MODEL` 识别本机型
+  （含 `UFI`/`jz02` → jz02），优先抓 `latest-<model>.json` 与本机型 APK 资产，
+  老 Release 只有一个包时行为不变。
+
+### WiFi 配置持久化（1.8.10 修复）
+
+`WifiCtl.sta_connect` 此前只 `addNetwork + enableNetwork + reconnect`，从不
+`saveConfiguration()`——4.4 不会自动落盘，`/data/misc/wifi/wpa_supplicant.conf`
+里没有 network 块，**面板连的 WiFi 重启必丢**（SP970 一直能自连是因为它的
+配置是当年系统 Settings 存的；JZ02 无屏只能走面板，必踩）。1.8.10 起连接
+成功即 `saveConfiguration()` 落盘；已装旧包的设备升级后需在面板重新连一次
+WiFi 让配置落盘。

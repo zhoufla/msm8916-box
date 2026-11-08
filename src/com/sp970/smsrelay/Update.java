@@ -206,17 +206,22 @@ public final class Update {
         long size = 0;
         String sha = "";
         JSONObject jsonAsset = null;
+        // 本机型的包：jz02 包带 -jz02 后缀；sp970 包无后缀（排除 -jz02 即可）。
+        // 机型匹配的资产出现时覆盖先拿到的，机型不符时退回第一个 .apk（老版本行为）。
+        String other = "-jz02.apk";
+        String mine = "jz02".equals(modelTag()) ? other : ".apk";
         for (int i = 0; assets != null && i < assets.length(); i++) {
             JSONObject a = assets.optJSONObject(i);
             if (a == null) continue;
             String name = a.optString("name", "").toLowerCase(Locale.US);
-            if (name.endsWith(".apk") && apkId == 0) {
+            if (name.endsWith(".apk") && (apkId == 0
+                    || (mine.equals(other) ? name.endsWith(mine) : !name.endsWith(other)))) {
                 apkId = a.optLong("id", 0);
                 apkUrl = a.optString("url", "");
                 // github.com 上的直链：不占 API 配额，能用就优先用它
                 apkBrowser = a.optString("browser_download_url", "");
                 size = a.optLong("size", 0);
-            } else if (name.equals("latest.json")) {
+            } else if (name.startsWith("latest")) {
                 jsonAsset = a;
             }
         }
@@ -257,18 +262,34 @@ public final class Update {
      * 这个地址走 github.com（网页/直链），不计入 API 每小时 60 次的配额，
      * 所以限流时仍然能查到版本、拿到 sha256，再从直链下载。
      */
+    /** 本机机型标签（升级资产匹配用）：JZ02（UFI 棒子）→ jz02，其余 → sp970。 */
+    static String modelTag() {
+        try {
+            String m = String.valueOf(Build.MODEL).toLowerCase(Locale.US);
+            return (m.contains("ufi") || m.contains("jz02")) ? "jz02" : "sp970";
+        } catch (Throwable t) {
+            return "sp970";
+        }
+    }
+
     private static JSONObject fromReleaseJson(AppConfig cfg, Throwable api) throws Exception {
         String repo = cfg.updateRepo == null ? "" : cfg.updateRepo.trim();
         try {
             if (repo.indexOf('/') <= 0) throw new IllegalArgumentException("仓库要写成 owner/repo");
             String base = "https://github.com/" + repo + "/releases/latest/download/";
-            JSONObject out = parseManifest(base + "latest.json", cfg, base);
+            // 优先机型清单（latest-jz02.json / latest-sp970.json），老 Release 只有 latest.json
+            JSONObject out;
+            try {
+                out = parseManifest(base + "latest-" + modelTag() + ".json", cfg, base);
+            } catch (Throwable noModelJson) {
+                out = parseManifest(base + "latest.json", cfg, base);
+            }
             out.put("source", "release-json");
-            out.put("notes", "GitHub API 不可用（" + msg(api) + "），已改用 release 里的 latest.json");
-            Logs.add("update", "API 不可用，改用 latest.json：v" + out.optString("version", ""));
+            out.put("notes", "GitHub API 不可用（" + msg(api) + "），已改用 release 里的 latest 清单");
+            Logs.add("update", "API 不可用，改用 latest 清单：v" + out.optString("version", ""));
             return out;
         } catch (Throwable t) {
-            throw new IllegalStateException(msg(api) + "；备用 latest.json 也失败：" + msg(t));
+            throw new IllegalStateException(msg(api) + "；备用 latest 清单也失败：" + msg(t));
         }
     }
 

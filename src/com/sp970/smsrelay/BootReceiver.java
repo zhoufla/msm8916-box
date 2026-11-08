@@ -13,7 +13,7 @@ public class BootReceiver extends BroadcastReceiver {
             String a = intent.getAction();
             if (Intent.ACTION_BOOT_COMPLETED.equals(a)
                     || "android.intent.action.QUICKBOOT_POWERON".equals(a)) {
-                AppConfig.writeSample();
+                AppConfig.writeSample(ctx);
                 ctx.startService(new Intent(ctx, RelayService.class));
             }
         } catch (Throwable ignored) {

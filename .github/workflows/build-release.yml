@@ -1,6 +1,7 @@
 name: build-release
 
 # 打 tag 触发：git tag v1.3.1 && git push origin v1.3.1
+# 两个机型一起出包：sp970（无后缀）+ jz02（-jz02 后缀，内嵌 jz02 默认配置）
 on:
   push:
     tags: ['v*']
@@ -17,6 +18,9 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        model: [sp970, jz02]
     steps:
       - uses: actions/checkout@v5
 
@@ -65,17 +69,64 @@ jobs:
           chmod +x build.sh tools/run-tests.sh
           ./tools/run-tests.sh
 
-      - name: 构建 APK
+      - name: 构建 APK（${{ matrix.model }}）
         run: |
           ANDROID_SDK="$ANDROID_SDK_ROOT" \
           VER="${{ steps.v.outputs.ver }}" \
           VC="${{ steps.v.outputs.code }}" \
+          MODEL="${{ matrix.model }}" \
           ./build.sh
 
       - name: 校验签名
         run: |
           "$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner" verify --print-certs dist/*.apk | head -4
-          cat dist/latest.json
+          cat dist/latest*.json
+
+      # 两个机型各自上传 dist 产物，release job 汇总成一个 Release
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.model }}
+          path: |
+            dist/*.apk
+            dist/latest*.json
+
+  release:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-all
+
+      - name: 汇总产物 + 生成兼容老版本的 latest.json
+        run: |
+          mkdir dist
+          cp dist-all/dist-sp970/* dist-all/dist-jz02/* dist/
+          python3 - <<'EOF'
+          import json, glob
+          latest = None
+          models = {}
+          for f in sorted(glob.glob('dist/latest-*.json')):
+              d = json.load(open(f))
+              models[d['model']] = d
+              if d['model'] == 'sp970':
+                  latest = dict(d)          # 老版本设备只认 latest.json 的平铺字段
+          latest = latest or dict(models[list(models)[0]])
+          latest['models'] = models
+          json.dump(latest, open('dist/latest.json', 'w'), indent=2)
+          print(json.dumps(latest, indent=2))
+          EOF
+
+      - name: 计算版本号
+        id: v
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            RAW="${GITHUB_REF_NAME#v}"
+          else
+            RAW="${{ inputs.version }}"
+          fi
+          echo "ver=$RAW" >> "$GITHUB_OUTPUT"
 
       - name: 发布 Release
         uses: softprops/action-gh-release@v2
@@ -84,10 +135,14 @@ jobs:
           name: v${{ steps.v.outputs.ver }}
           generate_release_notes: true
           body: |
-            由 GitHub Actions 构建（JDK 17 + build-tools 34 + android-19）。
+            由 GitHub Actions 构建（JDK 17 + build-tools 34 + android-19），两个机型同时出包：
+
+            - `com.sp970.smsrelay-<版本>.apk` — SP970-B
+            - `com.sp970.smsrelay-<版本>-jz02.apk` — JZ02 / UFI 棒子（内嵌 jz02 默认配置）
+            - `latest.json` 含各机型清单；设备端「检查更新」自动匹配本机型资产。
 
             设备端在面板「升级」页点「检查更新」即可，或等自动检查（默认 24 小时）。
-            安装包 SHA-256 见 `latest.json`；签名与既有安装一致，`install -r` 不会丢数据。
+            安装包 SHA-256 见 `latest*.json`；签名与既有安装一致，`install -r` 不会丢数据。
           files: |
-            dist/com.sp970.smsrelay-${{ steps.v.outputs.ver }}.apk
-            dist/latest.json
+            dist/*.apk
+            dist/latest*.json

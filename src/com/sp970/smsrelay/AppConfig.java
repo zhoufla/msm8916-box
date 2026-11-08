@@ -156,7 +156,7 @@ public final class AppConfig {
         String json = currentJson(ctx);
         if (json != null) c.parse(json);
         if (c.channels.isEmpty()) c.migrateLegacy(ctx);
-        if (c.channels.isEmpty()) c.parse(sampleJson());
+        if (c.channels.isEmpty()) c.parse(sampleJson(ctx));
         return c;
     }
 
@@ -167,7 +167,7 @@ public final class AppConfig {
         AppConfig c = new AppConfig();
         c.migrateLegacy(ctx);
         if (!c.channels.isEmpty()) return toJsonString(c.device, c.channels, c);
-        return sampleJson();
+        return sampleJson(ctx);
     }
 
     private static String currentJson(Context ctx) {
@@ -584,6 +584,31 @@ public final class AppConfig {
     }
 
     public static String sampleJson() {
+        // jz02 机型包构建时会内嵌 assets/model.conf（config/smsrelay.conf.jz02.example），
+        // 覆盖下面的通用默认（helper token / mirrorInbox 不同）；sp970 包没有这个文件。
+        // 无 Context 的调用方（writeSample 之外的旧路径）仍走内置默认。
+        return builtinSampleJson();
+    }
+
+    /** 机型默认配置优先：jz02 包的 assets/model.conf > 通用内置默认。 */
+    public static String sampleJson(Context ctx) {
+        if (ctx != null) {
+            try {
+                java.io.InputStream in = ctx.getAssets().open("model.conf");
+                java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
+                byte[] b = new byte[4096];
+                int n;
+                while ((n = in.read(b)) > 0) buf.write(b, 0, n);
+                in.close();
+                String s = buf.toString("UTF-8").trim();
+                if (s.length() > 0 && s.charAt(0) == '{') return s;
+            } catch (Throwable ignored) {
+            }
+        }
+        return builtinSampleJson();
+    }
+
+    private static String builtinSampleJson() {
         return "{\n" +
                 "  \"device\": \"" + Build.MODEL + "\",\n" +
                 "  \"web\": {\"enabled\": true, \"port\": 8080, \"user\": \"admin\", \"pass\": \"admin\"},\n" +
@@ -613,13 +638,13 @@ public final class AppConfig {
     }
 
     /** 首次部署时生成一份示例配置，避免设备上什么都没有。 */
-    public static void writeSample() {
+    public static void writeSample(Context ctx) {
         try {
             File f = new File(Environment.getExternalStorageDirectory(), CONF_NAME);
             if (f.exists()) return;
             FileWriter w = new FileWriter(f);
             w.write("# 多通道配置示例，改完重启服务生效\n");
-            w.write(sampleJson());
+            w.write(sampleJson(ctx));
             w.write("\n");
             w.close();
         } catch (Throwable ignored) {
