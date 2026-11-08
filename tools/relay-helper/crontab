@@ -11,3 +11,6 @@
 # 分钟位取 1,6,11,…（模 5），与每 2 分钟的看门狗偶有同分钟并发，am kill 秒级返回、互不干扰。
 # JZ02 逐项论证见 tools/jz02/README.md「v7 运行态精简」；SP970 见 tools/sp970/README.md。
 1,6,11,16,21,26,31,36,41,46,51,56 * * * * /system/bin/am kill com.android.launcher3 com.android.systemui com.android.keychain com.android.onetimeinitializer com.android.settings com.android.providers.contacts com.android.providers.media com.android.defcontainer >/dev/null 2>&1
+# 锁屏自愈：恢复出厂/刷机重置 locksettings.db 后每日低峰幂等修回（已正确时零写入）。
+# 仅写 DB 的一个布尔值，需下次重启生效；JZ02 有 ro.lockscreen.disable.default=true，直接跳过。
+15 3 * * * /system/bin/sh /system/etc/relay-helper/bin/disable-lockscreen.sh --apply --quiet >/dev/null 2>&1
