@@ -148,6 +148,7 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
     <nav id="nav">
       <button data-v="overview" class="on">概览</button>
       <button data-v="msgs">短信</button>
+      <button data-v="ch">通道</button>
       <button data-v="wifi">WiFi</button>
       <button data-v="net">蜂窝</button>
       <button data-v="ddns">DDNS</button>
@@ -245,21 +246,9 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
       </div>
     </div>
 
-    <!-- 子页签 3：转发配置（通道管理在上，转发记录精简在下） -->
+    <!-- 子页签 3：转发配置（通道在独立「通道」页签管理，这里放规则与记录） -->
     <div id="msgPaneRelay" style="display:none">
       <div class="card">
-        <h3>转发通道（收到的短信往哪里投递）</h3>
-        <div id="chList"><div class="empty">加载中…</div></div>
-        <div class="row" style="margin-top:6px">
-          <button class="btn sm" onclick="addChannel('dingtalk')">+ 钉钉</button>
-          <button class="btn sm" onclick="addChannel('webhook')">+ Webhook</button>
-          <span style="flex:1 1 auto"></span>
-          <button class="btn primary" onclick="saveConfig()">保存配置</button>
-        </div>
-        <div class="sep"></div>
-        <div class="hint">保存后立即生效：新消息按新通道投递。设备名与面板登录信息在「维护」页统一修改，保存时一并提交。</div>
-      </div>
-      <div class="card" style="margin-top:12px">
         <h3>转发规则（决定哪条短信投到哪、哪条丢弃）</h3>
         <div class="row" style="margin-bottom:6px">
           <label class="fld" style="max-width:300px"><span>未命中任何规则时</span>
@@ -271,6 +260,7 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
           <span style="flex:1 1 auto"></span>
           <button class="btn sm" onclick="rulesTestDialog()">匹配测试</button>
           <button class="btn sm" onclick="validateRules()">校验规则</button>
+          <button class="btn primary" onclick="saveConfig()">保存配置</button>
         </div>
         <label class="fld"><span>规则 JSON（按数组顺序求值；一条规则内字段 AND、列表内 OR；随「保存配置」一并提交）</span>
           <textarea id="rulesJson" rows="8" style="font-family:monospace" placeholder="[]"></textarea>
@@ -285,6 +275,23 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
       </div>
       <div id="msgList"><div class="empty">加载中…</div></div>
       <div class="pager" id="msgPager"></div>
+    </div>
+  </section>
+
+  <!-- 通道：转发通道统一定义，短信转发与维护告警都从这里选 -->
+  <section class="view" id="v-ch">
+    <div class="card">
+      <h3>转发通道（收到的短信往哪里投递）</h3>
+      <div id="chList"><div class="empty">加载中…</div></div>
+      <div class="row" style="margin-top:6px">
+        <button class="btn sm" onclick="addChannel('dingtalk')">+ 钉钉</button>
+        <button class="btn sm" onclick="addChannel('webhook')">+ Webhook</button>
+        <span style="flex:1 1 auto"></span>
+        <button class="btn primary" onclick="saveConfig()">保存配置</button>
+      </div>
+      <div class="sep"></div>
+      <div class="hint">保存后立即生效：新消息按新通道投递。短信转发的规则在「短信 → 转发配置」里引用这里的通道名；
+        「维护 → 告警推送」也复用这里的通道。设备名与面板登录信息在「维护」页统一修改，保存时一并提交。</div>
     </div>
   </section>
 
@@ -555,10 +562,10 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
         <span class="hint">把当前可达地址推给 DDNS 服务：station 模式报 NAT 出口 IPv4；IPv6 直报全球单播地址（蜂窝 IPv4 是运营商 CGNAT，不可达时不误报）。变更才更新，每条记录独立比对与推送，失败走告警推送。服务商与 Token 公共一份，解析记录可加多条。</span>
       </div>
       <div class="grid g2">
-        <label class="fld"><span>服务商</span><select id="ddProvider"><option value="duckdns">DuckDNS（免费子域）</option><option value="cloudflare">Cloudflare（自有域名）</option></select></label>
+        <label class="fld"><span>服务商</span><select id="ddProvider"><option value="cloudflare">Cloudflare（自有域名）</option></select></label>
         <label class="fld"><span>检查间隔（分钟，1–1440）</span><input id="ddInterval" type="number" min="1" max="1440" value="10"></label>
         <label class="fld"><span>Token / API Token</span><input id="ddToken" type="password" placeholder="留空 = 保持已保存的 Token"></label>
-        <label class="fld"><span>Cloudflare Zone（自有域名，DuckDNS 留空）</span><input id="ddZone" placeholder="example.com"></label>
+        <label class="fld"><span>Cloudflare Zone（自有域名）</span><input id="ddZone" placeholder="example.com"></label>
       </div>
       <div class="sep"></div>
       <div class="row" style="justify-content:space-between">
@@ -569,7 +576,7 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
         <thead><tr><th style="width:28px"></th><th>域名</th><th>网卡（必选）</th><th>记录类型</th><th>当前 v6</th><th>当前 v4</th><th>已推送</th><th>状态</th></tr></thead>
         <tbody id="ddRecBody"></tbody>
       </table>
-      <div class="hint">网卡<b>必须选择</b>，下拉项来自设备当前在线网卡（可在「概览 → 网卡」查看 IPv4 / IPv6）；不再支持留空自动。记录类型 v4=仅 IPv4、v6=仅 IPv6、both=两个都推。Cloudflare 按 A/AAAA 记录自动增改（TTL 300）；DuckDNS 一条记录同时带 v4/v6。每次更新都计入系统日志。</div>
+      <div class="hint">网卡<b>必须选择</b>，下拉项来自设备当前在线网卡（可在「概览 → 网卡」查看 IPv4 / IPv6）；不再支持留空自动。记录类型 v4=仅 IPv4、v6=仅 IPv6、both=两个都推。Cloudflare 按 A/AAAA 记录自动增改（TTL 300）。每次更新都计入系统日志。</div>
       <div class="row" style="margin-top:8px">
         <button class="btn sm primary" id="ddSave" onclick="saveDdCfg(this)">保存 DDNS 配置</button>
         <button class="btn sm" onclick="ddnsNow(this)">立即更新</button>
@@ -640,7 +647,7 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
       <div class="card">
         <h3>设备与面板</h3>
         <div class="grid g2">
-          <label class="fld"><span>设备名（消息前缀用）</span><input id="cfgDevice"></label>
+          <label class="fld"><span>设备名（消息前缀；同时作为路由器里的主机名）</span><input id="cfgDevice"></label>
           <label class="fld"><span>面板端口（1024–65535，80/443 绑不了）</span><input id="cfgPort" type="number" min="1024" max="65535"></label>
           <label class="fld"><span>面板账号</span><input id="cfgUser"></label>
           <label class="fld"><span>面板密码</span><input id="cfgPass" type="password"></label>
@@ -711,7 +718,8 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
           <label class="fld"><span>持续异常重复提醒（小时，1–168）</span><input id="alRemind" type="number" min="1" max="168" value="6"></label>
           <label class="fld"><span>流量配额（GB，自上次清零累计，0=关闭）</span><input id="alTraffic" type="number" min="0" max="10000" value="0"></label>
           <label class="fld"><span>低电量阈值（%，仅未充电时，0=关闭）</span><input id="alBattery" type="number" min="0" max="100" value="0"></label>
-          <label class="fld" style="grid-column:1/-1"><span>推送通道（逗号分隔通道名，留空=全部启用通道）</span><input id="alChannels" placeholder="运维群"></label>
+          <label class="fld" style="grid-column:1/-1"><span>推送通道（下拉多选，留空=全部启用通道；选项来自「通道」页签）</span>
+            <select id="alChannels" multiple size="5"></select></label>
         </div>
         <button class="btn sm primary" id="alSave" onclick="saveAlCfg(this)">保存告警配置</button>
         <div class="hint" style="margin-top:8px">状态翻转才推送 + 每 remindH 小时重复提醒一次 + 恢复时通知；保活重建/恢复是即时事件，不受检查间隔限制。</div>
@@ -944,6 +952,7 @@ for(var i=0;i<navBtns.length;i++){
 function loadView(v){
   if(v==='overview') loadOverview();
   else if(v==='msgs'){ loadMsgView(true); }
+  else if(v==='ch'){ loadConfig(); }
   else if(v==='sys'){ loadSys(); loadCpufreq(); }
   else if(v==='wifi') loadWifi();
   else if(v==='net') loadNet();
@@ -993,6 +1002,7 @@ function loadOverviewSys(){
     if(!d.ok){ $('devSub').textContent='面板异常：'+(d.message||d.error||''); $('liveDot').className='dot off'; return; }
     state.sys=d;
     $('devName').textContent=d.device||d.model;
+    document.title=(d.device||d.model)+' 控制台';
     $('devSub').innerHTML='<span class="dot"></span>'+esc(d.model)+' · Android '+esc(d.android)+' · 已运行 '+esc(d.uptime);
 
     var c=d.cpu||{}, m=d.mem||{}, t=d.temps||{}, st=d.storage||[];
@@ -1942,14 +1952,25 @@ function loadAl(){
   api('GET','/api/config',null,function(d){
     if(!d.ok) return;
     var a={};
-    try{ var root=JSON.parse(d.json); a=root.alerts||{}; }catch(e){ return; }
+    try{ var root=JSON.parse(d.json); a=root.alerts||{}; fillAlChannels(root.channels||[], a.channels||[]); }catch(e){ return; }
     $('swAl').className='sw'+(a.enabled?' on':'');
     $('alInterval').value=a.intervalMin||5;
     $('alRemind').value=a.remindH||6;
     $('alTraffic').value=a.trafficGb||0;
     $('alBattery').value=a.batteryPct||0;
-    $('alChannels').value=(a.channels||[]).join(', ');
   });
+}
+/** 告警推送通道下拉：选项=已配置通道，选中=alerts.channels 里点名的 */
+function fillAlChannels(chs, sel){
+  var el=$('alChannels'), pick={};
+  for(var i=0;i<sel.length;i++) pick[sel[i]]=1;
+  var h='';
+  for(var i=0;i<chs.length;i++){
+    var n=chs[i].name||('通道'+(i+1));
+    h+='<option value="'+esc(n)+'"'+(pick[n]?' selected':'')+'>'+esc(n)+
+      (chs[i].enabled?'':'（已停用）')+'</option>';
+  }
+  el.innerHTML=h||'<option value="">（还没有通道，去「通道」页签添加）</option>';
 }
 function toggleAl(){
   var on=$('swAl').className.indexOf('on')<0;
@@ -1965,8 +1986,8 @@ function saveAlCfg(btn){
   if(!(tg>=0&&tg<=10000)){ toast('流量配额需在 0–10000 GB 之间', true); return; }
   var bp=parseInt($('alBattery').value,10)||0;
   if(!(bp>=0&&bp<=100)){ toast('电量阈值需在 0–100 之间', true); return; }
-  var chs=($('alChannels').value||'').replace(/，/g,',');
-  var list=chs.trim()?chs.split(',').map(function(s){return s.trim();}).filter(function(s){return !!s;}):[];
+  var sel=$('alChannels'), list=[];
+  for(var i=0;i<sel.options.length;i++) if(sel.options[i].selected) list.push(sel.options[i].value);
   if(btn) btn.disabled=true;
   // 先取最新配置再改 alerts 段：避免页面上的旧值把别处刚改的配置覆盖回去
   api('GET','/api/config',null,function(cfg){
@@ -2049,7 +2070,7 @@ function loadDdCfg(){
     if(!d.ok){ $('ddStatus').textContent=d.message||d.error||''; return; }
     ddCurV6=d.curV6||'';
     $('swDd').className='sw'+(d.enabled?' on':'');
-    $('ddProvider').value=d.provider||'duckdns';
+    $('ddProvider').value='cloudflare';
     $('ddInterval').value=d.intervalMin||10;
     $('ddZone').value=d.zone||'';
     var rs=d.records||[];
