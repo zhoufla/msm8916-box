@@ -14,3 +14,8 @@
 # 锁屏自愈：恢复出厂/刷机重置 locksettings.db 后每日低峰幂等修回（已正确时零写入）。
 # 仅写 DB 的一个布尔值，需下次重启生效；JZ02 有 ro.lockscreen.disable.default=true，直接跳过。
 15 3 * * * /system/bin/sh /system/etc/relay-helper/bin/disable-lockscreen.sh --apply --quiet >/dev/null 2>&1
+# 第二卡槽物理未焊接（SP970）：保持 ril-daemon1 停止。框架仍按原厂 DSDS 初始化，
+# 卡 2 恒 ABSENT，主卡不受影响；开机后 crond 最多 60s 内停掉第二路 RIL 并持续保持。
+# 详见 tools/sp970/README.md「永久停用第二卡槽」。JZ02 无此服务，条件天然为假、零副作用。
+# 回滚：删掉下一行，再执行 start ril-daemon1。
+* * * * * [ "$(/system/bin/getprop init.svc.ril-daemon1)" = running ] && /system/bin/setprop ctl.stop ril-daemon1 >/dev/null 2>&1
