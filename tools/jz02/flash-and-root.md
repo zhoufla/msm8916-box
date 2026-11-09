@@ -13,6 +13,12 @@
 >
 > 当前真机已刷 v5、全项自检 16/16 PASS、适配层已部署并热重启验证通过。
 > 详见文末「v5 修复与真机验证结果」。**请勿再刷 v3 / v4 当最终包。**
+>
+> **⚠️ 2026-11-09 更新**：当前真机已改为**无 adb 公钥认证**的 v5.1 boot
+> （`ro.adb.secure=0`，boot 分区 md5 `0a5eae6e58fe6cfd7150692af436f06f`）。
+> 上文及「v5 修复与真机验证结果」中关于 `ro.adb.secure=1`、adb 公钥、
+> `c741af6f…2925` 的描述是 **v5 当时的历史状态**，现已不适用；
+> 详见文末「附：v5.1 —— 去掉 adb 公钥认证」。
 
 ## 为什么必须走 MiKo，而不是 fastboot
 
@@ -445,3 +451,95 @@ gadget 会重新枚举，`rndis0` 可能短暂没有 `192.168.42.129/24`，
 
 **分工**：`BAK-analysis/work/live/verify-hardened.py` 管刷包落地（新增面板
 状态 INFO 项）；`tools/jz02/deploy-jz02.py --verify-only` 管面板完整可用性。
+
+---
+
+## 附：v5.1 —— 去掉 adb 公钥认证（2026-11-09 实机）
+
+<!-- v5.1-noauth-2026-11-09 -->
+
+> 本附录描述 **2026-11-09 之后的当前真机状态**。上文「v5 修复与真机验证结果」
+> 里的 `ro.adb.secure=1`、两处公钥、`work/boot_rooted_v5.img` =
+> `c741af6f…2925`，以及 README 安装节「只有这台电脑能连」，
+> 都是 **v5 当时的历史记录**，现已不适用；原文保留不改写。
+
+### 1. 目标与前提
+
+用户确认「根本用不到」公钥认证，要求 JZ02 与 SP970 一致。两台真机体检
+（面板 `/api/maint/cmd` 的 root 通道，全程只读）：
+
+| 项 | JZ02 `192.168.10.174` | SP970 `192.168.10.196` |
+|---|---|---|
+| `ro.adb.secure` | 1（ramdisk `/default.prop`） | 未定义（adbd 默认不认证） |
+| `/system` 挂载 | ro | rw |
+| SELinux | Disabled | Enforcing |
+| 5555 | `0.0.0.0:5555` / adbd | 同左 |
+
+`ro.*` 属性运行时改不动：无害探针属性首次 `setprop` 成功、再设新值仍读回旧值，
+两台一致。所以 `setprop ro.adb.secure 0; stop/start adbd` 无效，
+**永久去掉只能改 boot ramdisk 的 `default.prop`**。
+
+### 2. 做法：不刷机、不用 fastboot 的 1 字节改动
+
+1. `dd if=/dev/block/mmcblk0p22 of=… bs=4096` 备份 16MB，md5
+   `c741af6f5d1d9612573296dcb8fa2925`，与 v5 记录一致，镜像可信。
+2. 布局：`ANDROID!` header，kernel 6,435,776B、ramdisk.gz 536,466B、
+   dt 292,864B、`page_size=2048`；ramdisk 区到 dt 之间有 536,576B 空间。
+3. 解压 ramdisk.gz → cpio，把 `default.prop` 的 `ro.adb.secure=1` 改成 `0`：
+   **16MB 镜像里只有这 1 字节 payload 变化**。gzip 头、header `id`、
+   kernel、dt、镜像尾部逐字节不变（原 `id` 与 mkbootimg 算法不符，说明
+   bootloader 不校验，所以不动它）；level 9 重压缩得 536,467B，不挤动 dt；
+   只更新 header offset 16 的 `ramdisk_size`。新镜像 md5
+   `0a5eae6e58fe6cfd7150692af436f06f`。
+4. PC 侧临时 HTTP 服务设备连不上（跨网段 Connection refused），改**差分传输**：
+   只把 536,467B `newrd.gz` 分 14 块 base64 经 `/api/maint/cmd` 送到
+   `/data/local/tmp`，再加 4B size，在设备侧基于备份镜像拼出完整 16MB，
+   md5 与本地一致。
+5. `dd if=… of=/dev/block/mmcblk0p22 bs=4096; sync`，
+   **从分区读回 md5 与新镜像一致**；`reboot`，21 秒后面板恢复。
+
+### 3. 重启后验证
+
+| 项 | 结果 |
+|---|---|
+| uptime | 4282s → 50s（确认真的重启） |
+| `getprop ro.adb.secure` / `/default.prop:10` | `0` / `ro.adb.secure=0` |
+| adbd / 5555 | running / `0.0.0.0:5555` |
+| boot 分区 md5 | `0a5eae6e58fe6cfd7150692af436f06f` |
+| 面板 `/api/maint/adb` | `ok=true, secure=false, staleCount=0` |
+
+开机的 `init.qcom.rc:180 copy /system/etc/adbkey.pub → /data/misc/adb/adb_keys`
+仍执行，但 adbd 不再认证，无影响；`/default.prop` 第 5 行注释仍写
+`ro.adb.secure=1`（历史注释，未改，不影响功能）。
+
+### 4. ⚠️ 安全影响
+
+两台现在都是 **`0.0.0.0:5555` + `ro.secure=0` + 无认证**：
+任何能路由到 10 网段的机器 `adb connect` 即可拿到 root，
+8080 面板密码在 adb root 面前不构成防护。建议用 `iptables` 限制 5555 来源，
+或改 / 关掉 `service.adb.tcp.port`（SP970 另有
+`persist.service.adb.tcp.port=5555`）。SP970 理论上可
+`setprop ro.adb.secure 1` 一次性开启认证，但 ro 属性一旦创建就无法运行时
+改回、只能重启撤销，不要自动化。
+
+### 5. 回滚与中间产物
+
+按用户决定，本次**已删除全部原 v5 boot 镜像副本**：设备
+`/sdcard/Download/boot_backup_adbsecure.img`、本机 `%TEMP%\boot_orig.img`，
+以及设备 `boot_noauth.img`、`newrd.gz`、`rsize.bin`、`adbprop-byte`、
+临时 HTTP 探针与本地镜像副本。因此没有现成备份能直接 `dd` 回去。
+
+恢复认证 = 把那 1 字节改回去：从当前 boot 分区读出镜像，解压 ramdisk.gz，
+cpio 里 `default.prop` 的 `ro.adb.secure=0` → `1`，沿用相同 gzip 头重压缩
+（≤536,576B），写回 ramdisk 区（offset 6,438,912），更新 header 的
+`ramdisk_size`，`dd` 回 `/dev/block/mmcblk0p22`，读回校验后 reboot。
+不必强求 md5 等于 `c741af6f…2925`（gzip 流不同但功能等价）。
+
+仅临时恢复（重启即失效）也可把属性共享内存 `/dev/__properties__` 里
+`ro.adb.secure` 的值字节改为 `1` 再 `stop/start adbd`；偏移**必须在当次
+开机动态定位，不要硬编码 2604**（该偏移只对本次开机有效）。
+
+残留：SP970 内存里的无害探针属性 `ro.adb.secure.probe=1`
+（Android 无 `unsetprop`，重启即消失），JZ02 重启后已消失。
+本次**未改动任何仓库代码**，仅增补 `tools/jz02/README.md` 与
+`tools/jz02/flash-and-root.md` 两份文档。

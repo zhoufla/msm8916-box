@@ -13,6 +13,12 @@
 >
 > 当前真机已刷 v5、全项自检 16/16 PASS、适配层已部署并热重启验证通过。
 > 详见文末「v5 修复与真机验证结果」。**请勿再刷 v3 / v4 当最终包。**
+>
+> **⚠️ 2026-11-09 更新**：当前真机已改为**无 adb 公钥认证**的 v5.1 boot
+> （`ro.adb.secure=0`，boot 分区 md5 `0a5eae6e58fe6cfd7150692af436f06f`）。
+> 上文（含安装节「只有这台电脑能连」）及「v5 修复与真机验证结果」中
+> 关于 `ro.adb.secure=1`、adb 公钥、`c741af6f…2925` 的描述是
+> **v5 当时的历史状态**，现已不适用；详见文末「附：v5.1 —— 去掉 adb 公钥认证」。
 
 本目录是 `msm8916-box` 针对 **JZ02（UFI / richal / juzhen，msm8916，Android 4.4.4 `KTU84P test-keys`）** 的适配层。
 原项目 `com.sp970.smsrelay` 的 Java 代码、Web 面板、短信转发逻辑**全部复用不改**（包名保持不变，避免大规模重构）；
@@ -997,3 +1003,522 @@ SP970 仍可用（默认 5037 adb server）：
 - 1.8.7（versionCode 10807），`dist/com.sp970.smsrelay-1.8.7.apk`，
   sha256=df2bfca5e0199769…（含 WRITE_SMS manifest 声明与 directInsert 诊断日志），
   已 `-r` 重装至 JZ02 并完成 10086 真实短信回路验证（见上）。
+
+
+<!-- jz02-framework-mode-denied-nv-band-2026-11-09 -->
+
+## v10：framework 制式层实测否决 + 弱信号短信的 NV 频段落点（2026-11-09）
+
+**痛点**：RSRP −114 ~ −115 / RSRQ −18 ~ −20 / level 1，弱信号下短信收发不稳；
+希望设备别只驻留 LTE，能回落到覆盖更好的 2G/3G 保短信，哪怕上不了网。
+
+### 先证伪：改 framework 制式没用
+
+- `ro.telephony.default_network=9` 在 `/system/build.prop:66`；65 行
+  `#default network mode set to lte` 只是误导性残留注释。**`9` 是
+  LTE/GSM/WCDMA 自动，`11` 才是 LTE_ONLY**。开机由 framework 用它初始化
+  `Settings.Global.preferred_network_mode`；无 init.d / post_boot / crontab 写 mode。
+- 可逆对照实验：`settings put global preferred_network_mode 3`（GSM/WCDMA，
+  不含 LTE），持续约 3 分钟，`gsm.network.type` 恒 `LTE`、
+  `mServiceState=0 0 home CMCC 46000 LTE LTE`、CS 域 IN_SERVICE、
+  短信队列 failed=0；radio/main 日志**没有任何 `SET_PREFERRED_NETWORK_TYPE`
+  下发请求**。实验后已写回 `9` 并验证恢复。
+- 与提交 `8785f47`「面板：移除网络制式设置」及本文件 v7 补充（687-690 行）
+  的结论一致；且证明 NV 改成 `CS and PS` 之后该结论依然成立。
+- **结论**：framework 层既没把制式下发给 modem，改了也不改变注册 RAT。
+  不改 build.prop、不重写 framework 默认值、不做开机守护去覆盖 mode。
+
+### 真正的锁：modem NV 频段
+
+- v7 已把 `UMTS System → Pref Service` 从 `PS` 改成 `CS and PS`，CS 域因此在
+  LTE 上经 SGs/CSFB 注册（`VOICE_REGISTRATION_STATE {1, …, 14}`），短信才通。
+  `RIL_REQUEST_VOICE_RADIO_TECH {14}`、IMS 关闭
+  （`persist.radio.calls.on.ims=0`、`IMS_REGISTRATION_STATE` GENERIC_FAILURE），
+  所以这台机器没有 VoLTE 短信这条路。
+- 但 `Preferred Band`（UMTS 段）**只勾了 `W-850` / `IMT 2100`，GSM 900/1800
+  未启用**（本文件 715-717 行当时已预言「GSM 回落类话音问题」）。modem 搜不到
+  2G，只能留在 LTE —— 这才是「信号只落在 LTE 上」的原因。
+
+### QPST 操作清单（需诊断口 9091，人工执行）
+
+1. 先 `Read from Phone` / 导出当前 NV 完整快照留底，作为回滚依据。
+   本机 NV / `modemst1,2` / `fsg` 是设备标定，只适用这台（见 149 行）。
+2. 确认 `UMTS System → Pref Service` = **`CS and PS`**，**不要改回去**；
+   改回 `PS` 会重现 `RESULT_ERROR_NO_SERVICE`（见 v7 补充）。
+3. 在 band 相关项里启用 **GSM 900 (P-GSM) / GSM 1800 (DCS)**，
+   保留现有 `W-850` / `IMT 2100`。项名以 QPST 实际读到的为准，可能分布在
+   `Preferred Band` 与独立的 GSM band 项；**先截图留底再改**。
+4. 若有独立的 LTE band 项，核对保留移动低频段 **B8(900) / B3(1800)**，
+   别只剩 B38/B40/B41 高频（室内穿透差，正是 −115 的来由）。
+5. `Write to Phone`：radio offline → write → online；或断电重插让 Android
+   恢复 `rndis,adb` 枚举。只枚举 Diag 9091 不是变砖，9008 才是 EDL（711-712 行）。
+6. 整机 reboot，等 2 分钟让注册稳定。
+
+### 验证（tools/jz02/rf-check.py，全程只读）
+
+```bash
+python3 tools/jz02/rf-check.py snapshot --save rf-before.json   # 改前基线
+python3 tools/jz02/rf-check.py snapshot --save rf-after.json    # QPST 写入 + reboot 后
+python3 tools/jz02/rf-check.py compare rf-before.json rf-after.json
+python3 tools/jz02/rf-check.py watch --count 12 --interval 5    # 观察重选/掉注册
+```
+
+`compare` 的判定：
+
+| 结果 | 含义 |
+|---|---|
+| `voice RAT` 变成非 LTE（GSM/UMTS/…） | **回落生效，目标达成** |
+| `voice state` 不是 `IN_SERVICE` | 短信会 `RESULT_ERROR_NO_SERVICE`，立刻回滚 NV |
+| `checkup.healthy=True`、`queue.failed` 不增、`sms_default_app` 不变 | 短信链路没被拖坏 |
+| `voice RAT` 仍 LTE | NV 未写入成功，或当地移动 2G 已退频 / 该卡未开通 2G 附着；用 `watch` 与 `snapshot` 的 `cells` 看重选 |
+
+### 回滚
+
+QPST 用步骤 1 的快照把 band 项改回只勾 `W-850` / `IMT 2100`，
+**保持 `Pref Service=CS and PS`**，reboot，再跑一次 `snapshot` 与改前对比。
+若整机只枚举 Diag 9091、无 RNDIS/ADB，断电重插即可。
+
+### 风险与备忘
+
+- 移动 2G 在部分地区已退频重耕；启用后若搜不到 2G，可能增加重选次数、
+  反而更不稳。改前务必留 NV 快照。
+- 刷含 NV 的 modem 镜像会把 `Pref Service` 打回 `PS`，需按 v7 补充重新写入。
+- 本次诊断全程只读（除可逆的 `mode=3` 对照实验，已回滚），未改任何持久化
+  配置、未动 `/system`、未动 NV；设备最终 `mode=9`、CS 域 IN_SERVICE、
+  checkup 全绿。
+
+## v11：`46002` 是 SIM 归属 PLMN，不是注册网络（2026-11-09）
+
+**起因**：对比两台设备时看到 JZ02 是 `46002`、SP970 是 `46000`，一度据此推断
+「两台驻留 PLMN 不同 → SIM 卡网络侧频段策略不同」。但**互换 SIM 卡后 JZ02 仍是
+`46002`**，这个推断站不住。实测字段来源后确认是**读错了字段**：此前基于
+「PLMN 不同」推出的「SIM 网络侧频段/小区优先级」推断予以撤销。
+
+### 字段来源与实测值
+
+面板 `/api/radio` 的 `simNumeric` 来自 `getprop gsm.sim.operator.numeric`
+（`Radio.java:62,102`），是 `SIMRecords` 用 **IMSI 的 MCC+MNC** 写出的 SIM
+归属 PLMN（HPLMN）；**注册网络是另一个属性 `gsm.operator.numeric`**。
+
+| | JZ02 | SP970 |
+|---|---|---|
+| IMSI | `460028023218781` | `460008311848598` |
+| `gsm.sim.operator.numeric`（SIM HPLMN） | `46002` | `46000,` |
+| `gsm.operator.numeric`（注册网络） | `46000` | `46000` |
+| `mServiceState` | `0 0 home CMCC CMCC 46000 LTE LTE` | 同左 |
+| 小区广播 PLMN | `mMcc=460 mMnc=0`，PCI 135 / CI 61556033 / TAC 13268 | — |
+| `gsm.operator.isroaming` | `false` | `false,false` |
+
+两台**实际都注册在中国移动 46000、都是 home、都不漫游**。`46000 / 46002 /
+46007 / 46008` 都是中国移动的 PLMN，互为 ePLMN（等效归属网络），所以 IMSI
+为 `46002` 的卡驻留 46000 小区不算漫游、仍显示 `CMCC`。
+
+**结论**：`46002` 与 RSRP 差 23 dB、与弱信号下收不到短信**没有因果关系**，
+它不是「换了个运营商/网络」的标志，只是这张卡的号段属性。信号差异仍回到
+驻留频段/小区与天线链路（见 v10 的 NV 频段结论）。
+
+### 为什么「互换卡也还是 46002」
+
+`46002` 是卡的固有值，严格换卡并冷启动后必然变成 `46000`。当时不变，是
+**属性值没被刷新**，不是卡没换：
+
+- `gsm.sim.operator.numeric` 由 `SIMRecords` 在开机 SIM READY 时一次性写入，
+  是全局缓存属性；msm8916 老 qcril 热插拔不保证上报 card-state change /
+  REFRESH，framework 就不会重读 IMSI。旁证：JZ02 的 `getSimSerialNumber()`
+  只上报 12 位 ICCID 前缀（`898600103124`），SIM 读取链路本就不完整。
+- JZ02 的 SIM 走 **GPIO 多路器**：`persist.jz02.sim.slot=3`（外置实体卡座），
+  由 `/system/etc/install-recovery.sh` + LightsService 在开机时切；hotdet
+  idle low、mux 默认停在内置 eSIM1。按 551-577 行，切卡必须
+  `setprop persist.jz02.sim.slot N; reboot`，首次切卡还曾整机挂起需断电重插。
+- 面板网络页的 APN 记录（`numeric=46002` 的 `China Mobile / cmnet`）是设备
+  数据库里的静态条目，`Radio.java:611` 按 `simNumeric` 选 APN，不重启不会重选，
+  也会造成「看起来一直 46002」。
+
+**一锤定音的验证**（换卡后整机 reboot，不要只热插拔）：
+
+```bash
+curl -su admin:admin http://192.168.10.174:8080/api/radio | jq '{imsi,simNumeric,iccid,operator,netType}'
+curl -su admin:admin -H 'Content-Type: application/json' \
+  -d '{"cmd":"echo sim=$(getprop gsm.sim.operator.numeric); echo net=$(getprop gsm.operator.numeric); echo slot=$(getprop persist.jz02.sim.slot)"}' \
+  http://192.168.10.174:8080/api/maint/cmd
+python3 tools/jz02/rf-check.py snapshot     # 已同时采两类 PLMN，避免再混读
+```
+
+| 结果 | 判读 |
+|---|---|
+| IMSI 变 `46000...` 且 `simNumeric=46000` | 换卡生效，属性随卡走 |
+| IMSI 变 `46000...` 但 `simNumeric` 仍 `46002` | framework 缓存未刷新（`SIMRecords` 没重载） |
+| IMSI 仍是 `46002...` | 卡没被识别：查 `slot=3`、GPIO mux、卡座接触 |
+
+### 顺带一条对弱信号更直接的证据
+
+一次 `GsmSST.getAllCellInfo()` 有效采样显示：服务小区 **PCI 135**
+（RSRP −116 / RSRQ −18），同时存在邻区 **PCI 154**（RSRP −106 / RSRQ −11）——
+邻区强 10 dB、RSRQ 好 7 dB，却没有成为服务小区。日志里只有一次有效采样，
+需多次确认，但至少说明现场有更好的小区可选。这更像是**测量/重选被 NV 频段
+配置限制**，而不是单纯「位置差」，与 v10 的 QPST 改 band 方案一致。
+`rf-check.py` 已把 `cells`（服务/邻区 PCI、RSRP、RSRQ）纳入快照与 `compare`，
+改 NV 前后可看 PCI 是否变化。
+
+本次全程只读，未改设备配置；仓库改动仅 `tools/jz02/README.md` 与
+`tools/jz02/rf-check.py`。
+
+---
+
+## 附：v5.1 —— 去掉 adb 公钥认证（2026-11-09 实机）
+
+<!-- v5.1-noauth-2026-11-09 -->
+
+> 本附录描述 **2026-11-09 之后的当前真机状态**。上文「v5 修复与真机验证结果」
+> 里的 `ro.adb.secure=1`、两处公钥、`work/boot_rooted_v5.img` =
+> `c741af6f…2925`，以及安装节「只有这台电脑能连」，
+> 都是 **v5 当时的历史记录**，现已不适用；原文保留不改写。
+
+### 1. 目标与前提
+
+用户确认「根本用不到」公钥认证，要求 JZ02 与 SP970 一致。两台真机体检
+（面板 `/api/maint/cmd` 的 root 通道，全程只读）：
+
+| 项 | JZ02 `192.168.10.174` | SP970 `192.168.10.196` |
+|---|---|---|
+| `ro.adb.secure` | 1（ramdisk `/default.prop`） | 未定义（adbd 默认不认证） |
+| `/system` 挂载 | ro | rw |
+| SELinux | Disabled | Enforcing |
+| 5555 | `0.0.0.0:5555` / adbd | 同左 |
+
+`ro.*` 属性运行时改不动：无害探针属性首次 `setprop` 成功、再设新值仍读回旧值，
+两台一致。所以 `setprop ro.adb.secure 0; stop/start adbd` 无效，
+**永久去掉只能改 boot ramdisk 的 `default.prop`**。
+
+### 2. 做法：不刷机、不用 fastboot 的 1 字节改动
+
+1. `dd if=/dev/block/mmcblk0p22 of=… bs=4096` 备份 16MB，md5
+   `c741af6f5d1d9612573296dcb8fa2925`，与 v5 记录一致，镜像可信。
+2. 布局：`ANDROID!` header，kernel 6,435,776B、ramdisk.gz 536,466B、
+   dt 292,864B、`page_size=2048`；ramdisk 区到 dt 之间有 536,576B 空间。
+3. 解压 ramdisk.gz → cpio，把 `default.prop` 的 `ro.adb.secure=1` 改成 `0`：
+   **16MB 镜像里只有这 1 字节 payload 变化**。gzip 头、header `id`、
+   kernel、dt、镜像尾部逐字节不变（原 `id` 与 mkbootimg 算法不符，说明
+   bootloader 不校验，所以不动它）；level 9 重压缩得 536,467B，不挤动 dt；
+   只更新 header offset 16 的 `ramdisk_size`。新镜像 md5
+   `0a5eae6e58fe6cfd7150692af436f06f`。
+4. PC 侧临时 HTTP 服务设备连不上（跨网段 Connection refused），改**差分传输**：
+   只把 536,467B `newrd.gz` 分 14 块 base64 经 `/api/maint/cmd` 送到
+   `/data/local/tmp`，再加 4B size，在设备侧基于备份镜像拼出完整 16MB，
+   md5 与本地一致。
+5. `dd if=… of=/dev/block/mmcblk0p22 bs=4096; sync`，
+   **从分区读回 md5 与新镜像一致**；`reboot`，21 秒后面板恢复。
+
+### 3. 重启后验证
+
+| 项 | 结果 |
+|---|---|
+| uptime | 4282s → 50s（确认真的重启） |
+| `getprop ro.adb.secure` / `/default.prop:10` | `0` / `ro.adb.secure=0` |
+| adbd / 5555 | running / `0.0.0.0:5555` |
+| boot 分区 md5 | `0a5eae6e58fe6cfd7150692af436f06f` |
+| 面板 `/api/maint/adb` | `ok=true, secure=false, staleCount=0` |
+
+开机的 `init.qcom.rc:180 copy /system/etc/adbkey.pub → /data/misc/adb/adb_keys`
+仍执行，但 adbd 不再认证，无影响；`/default.prop` 第 5 行注释仍写
+`ro.adb.secure=1`（历史注释，未改，不影响功能）。
+
+### 4. ⚠️ 安全影响
+
+两台现在都是 **`0.0.0.0:5555` + `ro.secure=0` + 无认证**：
+任何能路由到 10 网段的机器 `adb connect` 即可拿到 root，
+8080 面板密码在 adb root 面前不构成防护。建议用 `iptables` 限制 5555 来源，
+或改 / 关掉 `service.adb.tcp.port`（SP970 另有
+`persist.service.adb.tcp.port=5555`）。SP970 理论上可
+`setprop ro.adb.secure 1` 一次性开启认证，但 ro 属性一旦创建就无法运行时
+改回、只能重启撤销，不要自动化。
+
+### 5. 回滚与中间产物
+
+按用户决定，本次**已删除全部原 v5 boot 镜像副本**：设备
+`/sdcard/Download/boot_backup_adbsecure.img`、本机 `%TEMP%\boot_orig.img`，
+以及设备 `boot_noauth.img`、`newrd.gz`、`rsize.bin`、`adbprop-byte`、
+临时 HTTP 探针与本地镜像副本。因此没有现成备份能直接 `dd` 回去。
+
+恢复认证 = 把那 1 字节改回去：从当前 boot 分区读出镜像，解压 ramdisk.gz，
+cpio 里 `default.prop` 的 `ro.adb.secure=0` → `1`，沿用相同 gzip 头重压缩
+（≤536,576B），写回 ramdisk 区（offset 6,438,912），更新 header 的
+`ramdisk_size`，`dd` 回 `/dev/block/mmcblk0p22`，读回校验后 reboot。
+不必强求 md5 等于 `c741af6f…2925`（gzip 流不同但功能等价）。
+
+仅临时恢复（重启即失效）也可把属性共享内存 `/dev/__properties__` 里
+`ro.adb.secure` 的值字节改为 `1` 再 `stop/start adbd`；偏移**必须在当次
+开机动态定位，不要硬编码 2604**（该偏移只对本次开机有效）。
+
+残留：SP970 内存里的无害探针属性 `ro.adb.secure.probe=1`
+（Android 无 `unsetprop`，重启即消失），JZ02 重启后已消失。
+本次**未改动任何仓库代码**，仅增补 `tools/jz02/README.md` 与
+`tools/jz02/flash-and-root.md` 两份文档。
+
+---
+
+<!-- jz02-framework-solidify-2026-11-09 -->
+
+## v12：外置卡锁定 + 制式恢复 + 厂商广播摘除（2026-11-09）
+
+三项目标一次落地，**整机 reboot 实机验证通过**，`/api/health` 九项判据全绿。
+全程先备份、先建带外恢复通道，可完整回滚。
+
+### ① 单卡「一定」是外置卡：开机前锁死 mux
+
+`tools/jz02/install-recovery.sh` 在写完 GPIO 后追加 `lock_sim_mux`，把 6 个
+SIM 切换/热插节点 `chmod 0444`。依据：`/init.rc` 的 `chmod 0777` 在 `on boot`
+400-405 行，`class_start main` 在 431 行，本脚本（`service flash_recovery`，
+class main / oneshot / root）在后者执行，故 0444 一定覆盖 0777；全机无后续
+再改这些节点的脚本。`slot=0`（不写 GPIO）路径也会锁，root 凭
+`CAP_DAC_OVERRIDE` 仍可在下次冷启动改通道，`system_server`(uid 1000) 不能。
+
+重启实测：`init.svc.flash_recovery=stopped`、4 个节点 `-r--r--r--`、
+`sim1=0 sim2=0 sim3=1 hotdet=0`、`persist.jz02.sim.slot=3`、`sim_state=READY`。
+
+### ② 网络制式「保留且生效」
+
+**根因（精确反汇编 `telephony-common.jar` 的 `PhoneFactory.makeDefaultPhone`）**：
+
+| | 逻辑 |
+|---|---|
+| SP970（公版） | `Settings$Global.getInt("preferred_network_mode")` → `const/16 10`（`NT_MODE_LTE_CDMA_EVDO_GSM_WCDMA`）→ `putInt` |
+| JZ02（厂商） | 同位置多 32 个 code unit：插入 `richal default network mode=` 日志，并把两个分支的写回值都改成 **`const/16 11` = `NT_MODE_LTE_ONLY`** |
+
+这就是「每次开机 `preferred_network_mode` 被重写回 11、只驻留 LTE」的根因。
+v10 证伪的是**运行时**改 Settings（RIL 早已在开机时用 11 构造完毕），与本次
+结论不冲突：要生效必须改开机时写回/传给 RIL 的那个常量。
+
+**补丁**：两条 `const/16 11` → **9**（`NT_MODE_LTE_GSM_WCDMA`，与
+`ro.telephony.default_network=9` 一致，且只含这台移动定制基带支持的
+LTE/GSM/WCDMA，不强上 CDMA/EVDO）。厂商日志、分支、RIL 下发能力**全部保留**，
+只改 2 字节常量 —— 即「保留且生效、硬件和基带支持的前提下」。
+
+重启实测：`preferred_network_mode=9`、`default_network=9`、`buildprop=9`；
+`/api/radio` `mode=9 / modeLabel=GSM/WCDMA/LTE 自动`、`netType=LTE`；
+`mServiceState=0 0 home CMCC CMCC 46000 LTE LTE`（话音+数据 IN_SERVICE）。
+
+> **边界（重要）**：radio 日志仍无 `SET_PREFERRED_NETWORK_TYPE`，实际注册 RAT
+> 依旧由 modem NV 决定。AP 侧的 LTE_ONLY 障碍已清除，但要**真正回落到 2G/3G**
+> 仍需按 v10 的 QPST 清单在 NV `Preferred Band` 放开 GSM 900 (P-GSM) /
+> GSM 1800 (DCS)、保留 `Pref Service=CS and PS`，改前留 NV 快照、改后用
+> `rf-check.py snapshot/compare` 验证。这属于基带配置，本次**未越界改 NV**；
+> 若当地移动 2G 已退频，回落也不会发生，属客观无线条件。
+
+### ③ 厂商后门：摘除 7 个无权限广播
+
+`services.jar` 里 `LightsService.<init>` 动态注册的 7 个私有 action
+（`android.led.sim.switch` / `android.led.sw.reset` / `android.led.power.off` /
+`android.lte.get.cellinfo` / `android.intent.action.usbshare` /
+`android.intent.action.apnrestore` / `com.youdo.restore`）做**等长重命名**
+（末字符改 `z`），保持 dex `string_ids` 字典序。外部再发原 action 不再匹配，
+`trafficThread` / `switchSimSlot()` 不会被拉起；正常广播
+`BOOT_COMPLETED`、`CONNECTIVITY_CHANGE`、`SIM_STATE_CHANGED`、
+`WIFI_AP_STATE_CHANGED` 全部保留。
+
+重启实测：`dumpsys activity broadcasts` 中 7 个原 action 命中数**全为 0**，
+只剩改名后的 4 个（其余 3 个本就不在 dump 中）；LED/短信/保活未受影响。
+
+仍在线的**非 dex** 敞口（未处理，属独立决策）：
+`ro.sys.usb.default.config` 含 diag、`ro.boot.selinux=disable`、`/res/keys`
+已移除、`persist.sys.juzhen.*` 静态属性；以及非厂商的
+`ro.adb.secure=0` + adbd 监听 `0.0.0.0:5555`、8080 面板 `admin:admin`。
+
+### 补丁生成与部署（可复现）
+
+`tools/jz02/patch-framework.py`：输入**本机原版** `services.jar` /
+`telephony-common.jar`，输出 patched 两份。只改 `classes.dex` 内部字节并重算
+dex header 的 adler32 checksum 与 SHA-1 signature，jar 其余条目原样保留。
+
+字节级复核（改前/改后逐字节 diff）：
+
+| jar | 差异 | 说明 |
+|---|---|---|
+| telephony-common | **26 B** | 24 B header + 2 B 常量 |
+| services | **31 B** | 24 B header + 7 B 字符串 |
+
+32111 个 `string_ids` 重新解析后排序无一出错，checksum / signature 均正确。
+
+部署：patched jar 覆盖 `/system/framework/`，删
+`services.odex` / `telephony-common.odex` 与 `/data/dalvik-cache` 对应缓存
+（user 版全 odex，必须删，否则 dalvik 不会回落到 jar 内 dex），reboot。
+上传用 helper `cgi-bin/cmd` 分块 base64（body ≤ 64 KB）。
+
+**回滚包**（v13 收尾时已精简，见文末「收尾清理」）：设备
+`/sdcard/Download/devcmp-rollback.tar.gz` 与本机 WSL（仓库外）
+`~/msm8916-box-rollback/devcmp-rollback.tar.gz`，两者字节一致，
+md5 `23bca8c91bf684d7bdcf35441db81921`、4,480,849 B、8 个成员：
+原版 `services.jar` / `services.odex` / `telephony-common.jar` /
+`telephony-common.odex` / 原 `install-recovery.sh` / `build.prop` /
+`default.prop` / `init.rc`。`framework-res.apk` 全程未改动，无需备份；
+patched jar 可用 `tools/jz02/patch-framework.py` 从原版重新生成。
+
+### 带外恢复通道（临时，已关闭）
+
+改 framework 前在 `install-recovery.sh` 的 shebang 之后临时插入一行
+`busybox httpd -p 0.0.0.0:8898 -h /system/etc/relay-helper -f`（class main、
+早于 framework，故 framework 起不来时仍可 root 恢复；token 校验保留）。
+adb 通道不可用：本机定制 adbd 的 5555 不响应标准 ADB CNXN 握手，且本机无
+adb 客户端。
+
+重启实测 58s 时 8898 已监听、77s 面板 8080 起来。验证完成后已把
+`install-recovery.sh` 恢复为正式版（md5 `3c8733e6…`）、kill 8898、端口关闭，
+`/system` 回到 `ro`。
+
+### 最终验证（`reboot` 后）
+
+`/api/health` `healthy=true`（panel8080 / modemOnline / smsrelay / ssrZero /
+memOk / helper / ril / adbd5555 / simReady 全 true）；keepalive
+`fails=0 / lastPingOk=true / hipri=true`；`system_server` pid 871、
+`gsm.sim.state=READY`、`gsm.network.type=LTE`、helper `pong`。
+
+---
+
+## v13：usbtethering 解包 / odex 副作用收口 / 开机 mdss 风暴前移修复
+
+### ① SP970 `USBtether.apk` 解包 —— RNDIS 是功能，不是后门
+
+`/system/app/USBtether.apk`（md5 `400affbd3bc60cc00d82cddd1e6980da`，29822 B），
+包名 `com.example.usbtethering`，`sharedUserId=android.uid.system`，
+`targetSdk=17`，带 `com.qualcomm.permission.USE_QCRIL_MSG_TUNNEL`。
+Manifest：`.UsbDetact` receiver 监听 `ETHERNETTETHER_BROADCAST` 与
+`BOOT_COMPLETED`；服务 `.USBTether` / `.USBunTether`。
+**它是这台设备提供 RNDIS 网络共享的实现，不能禁用、不能删除。**
+
+`classes.dex`：10180 B / 197 strings / 58 types / 79 methods / 14 classes。
+逐指令反汇编（`r4_disasm.py`）的关键路径：
+
+| 方法 | 关键指令 | 含义 |
+|---|---|---|
+| `UsbDetact.is_port_locked` | `execmd("getprop persist.sys.usb.config")` → `equalsIgnoreCase("charging,none")` / `("charging,none,adb")` | 只看持久化配置，**不读** `android_usb_state`，也不看 `rndis0` |
+| `UsbDetact.onReceive` | `0084 invoke is_port_locked` → `0088 if-eqz v1,+19 → 0107 return-void` | **返回 1 才 `startService(com.example.USBTether)`**；「充电口配置」正是打开轮询的条件，不是跳过条件（名字有误导性） |
+| `USBTether.onStart` | 同一个 `$1` 对象注册两个 filter：`"USB tethering"` 与 `ACTION_BATTERY_CHANGED` | 电量广播是 sticky，注册即触发，之后每次电量变化再触发 |
+| `USBTether.onDestroy` | 仅 `super.onDestroy()` + `Log.d("ondestroy")` | 不显式 `unregisterReceiver`；但 Service Context 销毁时 framework 会清掉动态接收器，实测 `ReceiverList` 归 0 |
+| `USBTether$1.onReceive` | `isMobileConnected()`（返回值被丢弃）→ `Thread.sleep(500)` → `getDeclaredMethods()` 遍历找 `setUsbTethering` → `invoke(Boolean.TRUE)` | 每来一次电量广播就反射强开一次 USB tethering |
+
+当前插的是**供电口**：`android_usb_state=DISCONNECTED`、`usb/online=1`、
+`battery/status=Discharging`、`rndis0 DOWN`、
+`sys.usb.config=rndis,adb` 而 `persist.sys.usb.config=charging,none,adb`。
+后者正好命中 `is_port_locked()` → 开机自动拉起轮询 →
+`setUsbTethering(true)` 在无 USB 主机时永远不可能成功，于是每 ~20s 重复
+（`TESTBYCHANGETHERNET`），伴生 `Tethering` churn 与
+`QcrilMsgTunnelSocket IOException: Connection refused`。APK 全程没有判断
+真实链路状态，这就是「原因」。
+
+**处置：保留 RNDIS，只从外部补上它缺的那个判断。** 不动 APK、不动系统签名、
+不停包、不 `pm disable`。在 `tools/relay-helper/start.sh` 加
+`usb_tether_gate()`，由 30s 看门狗每轮执行：
+
+- `state=CONFIGURED`（真 USB 主机/数据口）→ 确保 `.USBTether` 在跑
+  （`am startservice -a com.example.USBTether`），RNDIS 与厂版完全一致；
+- 其它状态（供电口/无主机）→ `am stopservice -a com.example.USBTether`；
+- `ro.product.device=UFI`（JZ02）直接 return，不参与。
+
+实测：`am stopservice` 后 `ServiceRecord` 与 `ReceiverList` 均归 0，
+70s 观察窗口内 `setUsbTethering(true)` 0 次；`am startservice` 立即重建
+ServiceRecord / 进程并恢复反射调用链。插真实数据线时 30s 内自动恢复 RNDIS。
+
+### ② 上轮补丁的副作用：全量 odex 依赖表修复（已收口）
+
+删 `services.odex` / `telephony-common.odex` 会让所有引用它们的 preopt odex
+依赖表 stale。Dalvik odex `dey\n036\0` 的 deps entry 格式是
+`[u4 nameLen][name][20-byte dex-header signature]`，其中 signature 是
+**内嵌 dex 的 `SHA1(classes.dex[32:])`**，不是整个 odex 文件的 SHA-1；
+`checksum = adler32(odex[depsOffset:])`，字段在 header offset 36。
+
+- 灰度删单个 `voip-common.odex` → stale 13 → 25（连锁扩大），方案废弃并回滚；
+- 提升 runtime dalvik-cache 作为两个 odex → 名字对上但 signature mismatch，
+  由此校准了上面 20 字节的语义；
+- 下载 `/system/**/*.odex` 共 80 个（44 MB tar 触发面板
+  `/api/maint/file` 的 `OutOfMemoryError`，改 6 MB 分片下载拼接）；
+- 分类 `ALREADY_FIXED 13 / NEED_DEPS_REBUILD 1 / NEED_SIG_FIX 57 /
+  NO_TARGET_DEP 9`，等长替换旧 signature 并重算 checksum，
+  `services.odex` 单独重建 deps chunk（同分区原子 `mv`）；
+- 结果 `stale_count=0`，两次 reboot 后仍为 0。
+
+### ③ 开机 mdss 风暴「补丁后仍在」的真正原因 + 前移修复
+
+v7.2 的 `blank=4` 写在 `relay-helper/start.sh`。该脚本由
+`qcom-post-boot`（`class late_start / disabled / oneshot`，
+`on property:sys.boot_completed=1 -> start qcom-post-boot`）拉起，再
+`sleep 90` → 实际落地 ~142s；而风暴从 `boot_progress_enable_screen`
+（~43s）开始，43–142s 完全没被覆盖。
+
+主修复前移到 `/system/etc/install-recovery.sh`（`flash_recovery`，
+`class main`，早于 framework）：后台循环轮询 `fb0/blank`，等
+`init.svc.surfaceflinger=running` 累计 5 次后开始写 `blank=4`，
+每 1s 重断言共 240 次（覆盖 SF 的 `enable_screen` unblank 与旧 90s 兜底），
+`i>90` 有硬兜底。`start.sh` 的 90s 补写与 30s 看门狗按
+`show_blank_event` 补写保留为二道防线。写入 4 在已 blank 时是 no-op
+（`show_blank_event` 不变、dmesg 无新事件），已实测。
+
+重启实测（`dmesg` ring buffer 未回卷，oldest = `[ 0.000000]`）：
+
+| 指标 | 修复前 | 修复后 |
+|---|---|---|
+| `vsync poll timed out` + `frame timeout` | 508 + 508 | **4**（仅 0.98s / 17.15s 各一对） |
+| 首次 `blank=4` | ~142s | **19.72s** |
+| `mdss_fb0` stime | 30s 涨 ~10% 单核 | 30s **零增长**（stime = 1 jiffy） |
+| 41s / 103s / 192s / 551s `panel_power_on` | 1 | 0 |
+
+`/data/local/tmp/jz02-mdss-early.log`：
+`first_write_uptime=19.72` / `writes=236 warm=240` / `last_uptime=264.29`。
+
+### 回归与回滚
+
+两台 `/api/health` 均 9/9。JZ02 `/system` 已由 fstab 恢复 `ro`
+（SP970 是 eng 版，`/fstab.qcom` 里 `ro` 行被注释、`rw` 是原厂行为，
+不是本次改动造成）。JZ02 三项固化全部保持：
+`preferred_network_mode=9`、`sim=READY`、mux `0/0/1`、`stale=0`、
+patched jar md5 `0e5954bc…` / `2fde1e6b…`、7 个原厂商 action 命中 0。
+SP970 `USBtether.apk` md5 未变、包仍 `enabled`。
+
+回滚：
+
+- mdss：删 `install-recovery.sh` 的 early blank 块 + 注释 `start.sh` 两处补写
+  → 回到 v7.2（风暴原样回来）；
+- RNDIS 门控：注释 `start.sh` 的 `usb_tether_gate` 调用，或手工
+  `am startservice -a com.example.USBTether` 立即恢复厂版行为；
+- framework / odex：解包 `/sdcard/Download/devcmp-rollback.tar.gz`
+  （或 WSL `~/msm8916-box-rollback/` 的同名副本），覆盖 4 个原版
+  jar / odex，清 `/data/dalvik-cache` 后 reboot。**注意**：本轮把
+  `/system/**/*.odex` 里 57 个依赖项的 20 字节 signature 改成了 patched
+  dex 的签名，只换回 4 个原版文件会让这些 odex 重新 stale；完整回退需
+  同步重建依赖表（或直接重刷固件，最可靠）。
+
+本轮脚本：`tools/jz02/install-recovery.sh`（设备部署版 md5 `cea86053…`，
+仓库修订版 `ce491c7c…`，差异仅为一行回滚注释路径，见「收尾清理」）、
+`tools/relay-helper/start.sh`（md5 `98cbadca…`，两机同版）。
+
+### 收尾清理（v13 后）
+
+按用户决定「精简保留双份回滚包 + 一次性脚本全部不归档」执行：
+
+- **回滚包**：`devcmp-backup/`（19.8M，11 文件）精简为上面的
+  `devcmp-rollback.tar.gz`（4.3M，8 成员），设备上与 WSL 仓库外各一份，
+  md5 双向校验一致；未改动的 `framework-res.apk`、2 个 patched jar
+  （可由 `patch-framework.py` 重生成）不再保留。
+- **设备端**：JZ02 删 67 个文件 / 6 个空目录（`devcmp-fetch/` 91.8M 含
+  44.6M `all-odex.tar` + 8 个分片 + 13 个原始 stale odex、
+  `devcmp-backup/`、顶层 `svc.dex`/`tc.dex`/`jz02-fw*.dex`/`PF.*`、
+  `/data/local/tmp` 的 `_dx*`/`ir.*`/`relaytmp`/`r3all`/`led-locate`），
+  `/sdcard` 用量 183.3M → 40.0M；SP970 删 8 文件 / 1 目录，107.4M → 99.1M。
+  两机 `/data/local/tmp` 只剩运行中的 `relay-helper/` 与
+  `jz02-mdss-early.log`；11/6–11/8 的 `smsrelay-*` 运维备份/日志未动。
+- **本机**：`%TEMP%\devcmp\` 198 文件 / 165.9 MB 全清，54 个一次性
+  取证与部署脚本（`devcmp_*`/`r3_*`/`r4_*`/`r5_*`/`mkpatch`/`dex*`/
+  `upload_fw`/`deploy_fw` 等）全删，用户决定不把 `r3_fix_all.py`
+  归档进仓库；odex 修补方法仅保留 v13 的文字说明与 signature 常量。
+- **保留**：仓库仅 `README.md` / `install-recovery.sh` /
+  `patch-framework.py` / `relay-helper/start.sh` 四个固化文件；
+  `/system/framework/.r3tmp/` 是空目录，因 JZ02 `/system` 为 `ro`、
+  重挂载会让 `system_server` mmap 后无法恢复只读，故不删（无任何影响）。
+- 删除前以回滚包 md5 + 成员数做门控，分批 ≤10 文件并逐批校验
+  `remain=0`；清理后两机 `/api/health` 仍 9/9。
+- 同步修正失效路径：`install-recovery.sh` 第 37 行回滚注释与
+  `patch-framework.py` docstring 由已删除的 `devcmp-backup/` 改指向
+  `devcmp-rollback.tar.gz`。仓库版 `install-recovery.sh` md5
+  `ce491c7cc23d5ce4b5d7687b53d89488`，设备 `/system/etc/install-recovery.sh`
+  仍是部署时的 `cea8605360c5e8d9bf751563c4daefb6`，两者仅差这一行注释、
+  功能完全一致。不重部署是为了不动 JZ02 的 `/system` 只读挂载
+  （重挂载 `rw` 后需重启才能由 fstab 恢复 `ro`）。
