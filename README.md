@@ -342,7 +342,7 @@ WebPanel「假在线」（内部 running=true、端口不再 accept）永远不�
 
 | 层 | 实现 | 产物 / 开关 |
 |---|---|---|
-| 现场取证 | `Logs.add` 同步追加落盘 + 256KB×3 轮转，每行带 `up=` 单调秒；`bin/logsnap.sh` 每 2 分钟覆盖式留一份 dmesg + logcat 尾部（先写 .tmp 再 mv，拔电不破坏上一份） | `/sdcard/Download/smsrelay-run.log[.1-.3]`、`smsrelay-lastkmsg.log` |
+| 现场取证 | `Logs.add` 同步追加落盘 + 256KB×3 轮转，每行带 `up=` 单调秒；`bin/logsnap.sh` 每 2 分钟覆盖式留一份 dmesg + logcat 尾部（先写 .tmp 再 mv，拔电不破坏上一份；dmesg 已滤掉显示/USB/充电刷屏，另存一份完整滤波版） | `/sdcard/Download/smsrelay-run.log[.1-.3]`、`smsrelay-lastkmsg.log`、`smsrelay-dmesg.log` |
 | App 内第一道 | `AlarmManager.ELAPSED_REALTIME_WAKEUP` 每 5 分钟 → `AlarmReceiver` → `Watchdog.probeAndRepair()`；探免认证 `GET /api/ping`，失败 `WebPanel.restart()` | 端口文件 `/sdcard/Download/smsrelay-port` |
 | helper 第二道 | `bin/watchdog-8080.sh` 每 2 分钟探 `/api/ping`：fail=1 发 `WATCHDOG_TICK` 广播 → fail=2/3 `am force-stop` + `am start -n …/.MainActivity` + 广播 → fail=4 `reboot` | 日志 `smsrelay-watchdog.log`；`touch smsrelay-no-reboot` 可禁用自动 reboot |
 

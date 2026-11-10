@@ -33,6 +33,9 @@ public final class Ddns {
     private static final String PREFS = "ddns";
     private static volatile long lastTick = 0L;
     private static volatile boolean lastFail = false;   // 给 Alerts 恢复事件用
+    /** 「地址未变」心跳日志的节流间隔：地址通常几天不变，全量记会刷满环形日志。 */
+    private static final long SKIP_LOG_MS = 6L * 3600 * 1000;
+    private static volatile long lastSkipLogAt = 0L;
 
     private Ddns() {
     }
@@ -143,7 +146,14 @@ public final class Ddns {
                     i == 0 ? p.getString("lastPair", "") : "");
             if (!DdnsLogic.ipChanged(lastPair, v4r, v6r)) {
                 putRec(p, i, "lastError", "");
-                Logs.add("ddns", label + "：地址未变，跳过（" + lastPair + "）");
+                // 检查每 10 分钟一轮而地址通常几天不变：全量记会让「地址未变」
+                // 占满面板环形日志（真机实测 67%），有用记录几小时就被冲掉。
+                // 只保留 6 小时一次的心跳，证明 DDNS 线程还活着；当前地址面板可见。
+                long now = SystemClock.elapsedRealtime();
+                if (lastSkipLogAt == 0L || now - lastSkipLogAt >= SKIP_LOG_MS) {
+                    lastSkipLogAt = now;
+                    Logs.add("ddns", label + "：地址未变，跳过（" + lastPair + "）");
+                }
                 continue;
             }
 

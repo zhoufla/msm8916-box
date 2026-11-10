@@ -698,12 +698,13 @@ pre.term{background:#0b1220;border:1px solid var(--line);border-radius:10px;padd
           <label class="fld"><span>检查间隔（分钟，1–1440）</span><input id="alInterval" type="number" min="1" max="1440" value="5"></label>
           <label class="fld"><span>持续异常重复提醒（小时，1–168）</span><input id="alRemind" type="number" min="1" max="168" value="6"></label>
           <label class="fld"><span>流量配额（GB，自上次清零累计，0=关闭）</span><input id="alTraffic" type="number" min="0" max="10000" value="0"></label>
-          <label class="fld"><span>低电量阈值（%，仅未充电时，0=关闭）</span><input id="alBattery" type="number" min="0" max="100" value="0"></label>
+          <!-- 本机 USB 直供、无电池：保留字段兼容旧配置，界面上不再提供低电量阈值 -->
+          <input id="alBattery" type="hidden" value="0">
           <label class="fld" style="grid-column:1/-1"><span>推送通道（下拉多选，留空=全部启用通道；选项来自「通道」页签）</span>
             <select id="alChannels" multiple size="5"></select></label>
         </div>
         <button class="btn sm primary" id="alSave" onclick="saveAlCfg(this)">保存告警配置</button>
-        <div class="hint" style="margin-top:8px">状态翻转才推送 + 每 remindH 小时重复提醒一次 + 恢复时通知；保活重建/恢复是即时事件，不受检查间隔限制。</div>
+        <div class="hint" style="margin-top:8px">状态翻转才推送 + 每 remindH 小时重复提醒一次 + 恢复时通知；保活重建/恢复是即时事件，不受检查间隔限制。本机 USB 直供、无电池，不提供低电量告警。</div>
       </div>
 
       <div class="card">
