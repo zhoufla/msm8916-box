@@ -102,7 +102,13 @@ jobs:
       - name: 汇总产物 + 生成兼容老版本的 latest.json
         run: |
           mkdir dist
-          cp dist-all/dist-sp970/* dist-all/dist-jz02/* dist/
+          # 两个机型的 APK 文件名不同，可以直接并到 dist/
+          cp dist-all/dist-sp970/*.apk dist-all/dist-jz02/*.apk dist/
+          # build.sh 里 sp970 产出 latest.json、jz02 产出 latest-jz02.json；直接 glob 拷贝
+          # 会让 jz02 清单覆盖 sp970，dist 里也没有 latest-sp970.json，设备按机型取
+          # sha256 时只能拿到 jz02 的，装机校验必挂（v1.8.15 实测）。这里按机型改名。
+          cp dist-all/dist-sp970/latest.json dist/latest-sp970.json
+          cp dist-all/dist-jz02/latest-jz02.json dist/latest-jz02.json
           python3 - <<'EOF'
           import json, glob
           latest = None
